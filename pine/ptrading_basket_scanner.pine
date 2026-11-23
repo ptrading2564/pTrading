@@ -5,7 +5,7 @@ indicator("pTrading 38-Symbol Momentum Breakout Scanner [v6]", overlay=true, max
 // 1. INPUT CONFIGURATION
 // ==============================================================================
 grp_sec = "Webhook Security & Parameters"
-i_secret = input.string("your_super_secret_webhook_token_here_change_me", "Webhook Secret Token", group=grp_sec)
+i_secret = input.string("trading2564_secret_token_7721", "Webhook Secret Token", group=grp_sec)
 i_rvol_mult = input.float(1.5, "Min RVOL Multiplier", minval=1.0, step=0.1, group=grp_sec)
 i_atr_len = input.int(14, "ATR Length", minval=1, group=grp_sec)
 i_max_ext = input.float(0.75, "Max ATR Extension Above OR High", minval=0.1, step=0.05, group=grp_sec)
@@ -98,7 +98,7 @@ f_eval_symbol(sym) =>
         var float sym_or_l = na
         var int last_day = na
 
-        cur_day = dayofmonth(time("America/New_York"))
+        cur_day = dayofmonth(time, "America/New_York")
         if cur_day != last_day
             sym_or_h := na
             sym_or_l := na

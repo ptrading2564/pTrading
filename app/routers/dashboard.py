@@ -15,6 +15,7 @@ from app.brokers.alpaca_adapter import AlpacaAdapter
 from app.config import ExecutionMode, settings
 from app.db import get_connection, get_recent_signals, get_system_state, set_system_state
 from app.services.chartmill_importer import chartmill_importer
+from app.services.market_scanner import get_market_scanner
 from app.services.risk_manager import RiskManager
 from app.services.telegram_bot import telegram
 
@@ -106,6 +107,13 @@ async def dashboard_home(
     active_basket_str = basket_str or saved_basket or ""
     active_basket_count = basket_count or (len(active_basket_str.split(",")) if active_basket_str else 0)
 
+    # Fetch server-side scanner status (Option 3)
+    try:
+        scanner_info = get_market_scanner().get_status_info()
+    except Exception as e:
+        logger.warning("Error fetching scanner status info: %s", e)
+        scanner_info = {"status": "UNAVAILABLE", "market_health": {}}
+
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -126,6 +134,7 @@ async def dashboard_home(
             "recent_signals": recent_signals,
             "basket_string": active_basket_str,
             "basket_count": active_basket_count,
+            "scanner_info": scanner_info,
         },
     )
 
@@ -282,3 +291,13 @@ async def reject_signal(
         await conn.commit()
     await telegram.send_message(f"❌ Signal #{signal_id} rejected from Web UI.")
     return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/api/scanner/run-now")
+async def trigger_scanner_manual(username: str = Depends(authenticate_user)):
+    """Manually triggers an immediate server-side scan iteration."""
+    scanner = get_market_scanner()
+    results = await scanner.scan_once()
+    logger.info("Manual scan triggered by %s. Results: %d", username, len(results))
+    return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+

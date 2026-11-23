@@ -24,7 +24,7 @@ var float or_high = na
 var float or_low = na
 var int last_trade_day = na
 
-cur_day = dayofmonth(time("America/New_York"))
+cur_day = dayofmonth(time, "America/New_York")
 is_new_day = cur_day != last_trade_day
 
 if is_new_day

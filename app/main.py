@@ -13,6 +13,7 @@ from app.db import init_db
 from app.routers.dashboard import router as dashboard_router
 from app.routers.webhook import router as webhook_router
 from app.services.lifecycle_worker import LifecycleWorker
+from app.services.market_scanner import get_market_scanner
 
 # Configure logging
 logging.basicConfig(
@@ -36,9 +37,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     worker_task = asyncio.create_task(lifecycle_worker.start(poll_interval_seconds=5.0))
     logger.info("LifecycleWorker background monitoring loop launched.")
 
+    # Initialize and launch MarketScanner background task (Option 3)
+    scanner_task = None
+    if settings.SCANNER_ENABLED:
+        market_scanner = get_market_scanner()
+        scanner_task = asyncio.create_task(market_scanner.start())
+        logger.info("MarketScanner background monitoring loop launched (Option 3 server-side scanning).")
+
     yield
 
     logger.info("Shutting down pTrading system...")
+    if scanner_task:
+        get_market_scanner().stop()
+        scanner_task.cancel()
+        try:
+            await scanner_task
+        except asyncio.CancelledError:
+            pass
+
     lifecycle_worker.stop()
     worker_task.cancel()
     try:

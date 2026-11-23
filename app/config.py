@@ -68,6 +68,18 @@ class Settings(BaseSettings):
     EOD_FLATTEN_TIME: str = "15:55"
     EARLY_CLOSE_FLATTEN_TIME: str = "12:55"
 
+    # Server-Side Market Scanner (Option 3)
+    SCANNER_ENABLED: bool = True
+    SCANNER_POLL_INTERVAL_SECONDS: int = 30
+    ALPACA_DATA_FEED: str = "iex"  # "iex" (free) or "sip" (paid)
+    SCANNER_MIN_RVOL: float = 1.5
+    SCANNER_MAX_ATR_EXTENSION: float = 0.75
+    DEFAULT_BASKET: str = (
+        "NVDA,TSLA,AMD,PLTR,SMCI,ARM,AVGO,META,AMZN,MSFT,AAPL,GOOGL,NFLX,COIN,HOOD,MSTR,"
+        "APP,RDDT,CAVA,DKNG,UBER,CRWD,PANW,SNOW,DDOG,NET,ZS,CELH,ONON,DECK,ANET,VRT,GEV,"
+        "CEG,VST,DUOL,HIMS,BROS"
+    )
+
     # Telegram Bot Settings
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
