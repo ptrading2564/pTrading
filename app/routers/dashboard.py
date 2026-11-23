@@ -107,9 +107,9 @@ async def dashboard_home(
     active_basket_count = basket_count or (len(active_basket_str.split(",")) if active_basket_str else 0)
 
     return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
+        request=request,
+        name="dashboard.html",
+        context={
             "username": username,
             "equity": equity,
             "starting_equity": starting_equity,
@@ -143,9 +143,9 @@ async def analytics_page(request: Request, username: str = Depends(authenticate_
         closed_trades = [dict(r) for r in await cursor_trades.fetchall()]
 
     return templates.TemplateResponse(
-        "analytics.html",
-        {
-            "request": request,
+        request=request,
+        name="analytics.html",
+        context={
             "username": username,
             "daily_records": daily_records,
             "closed_trades": closed_trades,
