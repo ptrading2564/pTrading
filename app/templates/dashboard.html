@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Control & Status Banner -->
+  <div class="bg-slate-800/90 border border-slate-700/80 rounded-xl p-5 shadow-lg flex flex-col md:flex-row items-center justify-between gap-4">
+    <!-- Execution Mode Selector -->
+    <div class="flex items-center gap-3">
+      <span class="text-xs uppercase tracking-wider font-semibold text-slate-400">Execution Mode:</span>
+      <form action="/api/system/mode" method="POST" class="inline-flex rounded-lg bg-slate-900 p-1 border border-slate-700">
+        <button type="submit" name="mode" value="AUTO" class="px-3 py-1.5 rounded-md text-xs font-semibold transition {% if execution_mode == 'AUTO' %}bg-emerald-600 text-white shadow{% else %}text-slate-400 hover:text-white{% endif %}">
+          Auto-Execute
+        </button>
+        <button type="submit" name="mode" value="SEMI_AUTO" class="px-3 py-1.5 rounded-md text-xs font-semibold transition {% if execution_mode == 'SEMI_AUTO' %}bg-amber-600 text-white shadow{% else %}text-slate-400 hover:text-white{% endif %}">
+          Semi-Auto (Confirm)
+        </button>
+        <button type="submit" name="mode" value="PAUSED" class="px-3 py-1.5 rounded-md text-xs font-semibold transition {% if execution_mode == 'PAUSED' %}bg-slate-700 text-white shadow{% else %}text-slate-400 hover:text-white{% endif %}">
+          Paused
+        </button>
+      </form>
+    </div>
+
+    <!-- Kill Switch & Flatten Controls -->
+    <div class="flex items-center gap-3">
+      {% if kill_switch == 'ON' %}
+      <div class="px-3 py-1.5 bg-rose-500/20 border border-rose-500 text-rose-300 rounded-lg text-xs font-bold animate-pulse">
+        KILL-SWITCH ACTIVE (TRADING HALTED)
+      </div>
+      <form action="/api/system/kill-switch" method="POST">
+        <input type="hidden" name="action" value="DISARM">
+        <button type="submit" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-bold transition shadow">
+          Disarm Kill-Switch
+        </button>
+      </form>
+      {% else %}
+      <form action="/api/system/kill-switch" method="POST" onsubmit="return confirm('EMERGENCY: Are you sure you want to trigger the Kill-Switch? All open positions will be MARKET FLATTENED and all pending orders CANCELLED immediately.');">
+        <input type="hidden" name="action" value="ARM">
+        <button type="submit" class="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition shadow-lg shadow-rose-600/30 flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+          EMERGENCY FLATTEN
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Key Metrics Row -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <!-- Live Equity -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow">
+      <div class="text-xs uppercase tracking-wider text-slate-400 font-medium">Live Equity</div>
+      <div class="text-2xl font-bold text-white mt-1">${{ "%.2f"|format(equity) }}</div>
+      <div class="text-xs text-slate-400 mt-1">Starting Today: ${{ "%.2f"|format(starting_equity) }}</div>
+    </div>
+
+    <!-- Daily P&L -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow">
+      <div class="text-xs uppercase tracking-wider text-slate-400 font-medium">Today's P&L</div>
+      <div class="text-2xl font-bold mt-1 {% if daily_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+        {% if daily_pnl >= 0 %}+{% endif %}${{ "%.2f"|format(daily_pnl) }} ({{ "%.2f"|format(daily_pnl_pct) }}%)
+      </div>
+      <div class="text-xs text-slate-400 mt-1">Daily Limit: -{{ daily_breaker_limit }}% Circuit Breaker</div>
+    </div>
+
+    <!-- Open Positions -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow">
+      <div class="text-xs uppercase tracking-wider text-slate-400 font-medium">Active Positions</div>
+      <div class="text-2xl font-bold text-white mt-1">{{ positions|length }} / {{ max_positions }} Max</div>
+      <div class="text-xs text-slate-400 mt-1">0.5% Compounding Risk per Trade</div>
+    </div>
+
+    <!-- EOD Cutoff -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow">
+      <div class="text-xs uppercase tracking-wider text-slate-400 font-medium">EOD Flatten Cutoff</div>
+      <div class="text-2xl font-bold text-sky-400 mt-1">{{ flatten_time_et }} ET</div>
+      <div class="text-xs text-slate-400 mt-1">100% Cash Overnight Guarantee</div>
+    </div>
+  </div>
+
+  <!-- Active Positions Table -->
+  <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
+    <div class="p-4 border-b border-slate-700/60 flex items-center justify-between">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-200">Open Positions ({{ positions|length }})</h2>
+      <span class="text-xs text-slate-400">Target +2.0R &bull; Breakeven Step at +1.0R</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700/60">
+          <tr>
+            <th class="py-3 px-4">Symbol</th>
+            <th class="py-3 px-4">Qty</th>
+            <th class="py-3 px-4">Entry Price</th>
+            <th class="py-3 px-4">Current Price</th>
+            <th class="py-3 px-4">Market Value</th>
+            <th class="py-3 px-4">Unrealized P&L</th>
+            <th class="py-3 px-4">Status</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-700/40 font-mono">
+          {% for p in positions %}
+          <tr class="hover:bg-slate-700/20 transition">
+            <td class="py-3 px-4 font-bold text-white">{{ p.symbol }}</td>
+            <td class="py-3 px-4">{{ p.qty }}</td>
+            <td class="py-3 px-4">${{ "%.2f"|format(p.entry_price) }}</td>
+            <td class="py-3 px-4">${{ "%.2f"|format(p.current_price) }}</td>
+            <td class="py-3 px-4">${{ "%.2f"|format(p.market_value) }}</td>
+            <td class="py-3 px-4 font-semibold {% if p.unrealized_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+              {% if p.unrealized_pnl >= 0 %}+{% endif %}${{ "%.2f"|format(p.unrealized_pnl) }}
+            </td>
+            <td class="py-3 px-4">
+              <span class="px-2 py-0.5 rounded text-[10px] font-sans font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">
+                ACTIVE
+              </span>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="py-6 text-center text-slate-500 font-sans">No open positions. All cash.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ChartMill CSV Importer Section -->
+  <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow space-y-4">
+    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-700/60 pb-3">
+      <div>
+        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-200">ChartMill Pre-Market CSV Importer</h2>
+        <p class="text-xs text-slate-400 mt-0.5">Upload daily ChartMill screen export to filter earnings and rank top 38 candidates for TradingView.</p>
+      </div>
+      <a href="https://www.chartmill.com" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 transition">Open ChartMill &rarr;</a>
+    </div>
+
+    <!-- Upload Form -->
+    <form action="/api/chartmill/upload" method="POST" enctype="multipart/form-data" class="flex flex-col sm:flex-row items-center gap-3">
+      <input type="file" name="file" accept=".csv" required class="block w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-sky-600 file:text-white hover:file:bg-sky-500 cursor-pointer">
+      <button type="submit" class="w-full sm:w-auto px-5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold whitespace-nowrap transition shadow">
+        Process & Rank Basket
+      </button>
+    </form>
+
+    {% if basket_string %}
+    <!-- Ready Basket Output -->
+    <div class="p-4 bg-slate-900 rounded-lg border border-slate-700 space-y-3">
+      <div class="flex items-center justify-between">
+        <span class="text-xs font-bold text-emerald-400 uppercase tracking-wide">
+          Top {{ basket_count }} Basket Ready for TradingView
+        </span>
+        <button onclick="navigator.clipboard.writeText('{{ basket_string }}'); alert('Copied 38-symbol basket to clipboard!');" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded transition">
+          Copy Basket to Clipboard
+        </button>
+      </div>
+      <textarea readonly rows="2" class="w-full bg-slate-950 p-2.5 rounded font-mono text-xs text-slate-300 border border-slate-800 select-all">{{ basket_string }}</textarea>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Recent Incoming Signals Feed -->
+  <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
+    <div class="p-4 border-b border-slate-700/60 flex items-center justify-between">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-200">Recent Signals Feed (Last 25)</h2>
+      <span class="text-xs text-slate-400">Webhook Source: TradingView 5m OR Breakouts</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700/60">
+          <tr>
+            <th class="py-3 px-4">Time</th>
+            <th class="py-3 px-4">Symbol</th>
+            <th class="py-3 px-4">Price</th>
+            <th class="py-3 px-4">OR Range</th>
+            <th class="py-3 px-4">ATR</th>
+            <th class="py-3 px-4">Status</th>
+            <th class="py-3 px-4">Action / Notes</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-700/40 font-mono">
+          {% for s in recent_signals %}
+          <tr class="hover:bg-slate-700/20 transition">
+            <td class="py-3 px-4 text-slate-400">{{ s.received_at }}</td>
+            <td class="py-3 px-4 font-bold text-white">{{ s.symbol }}</td>
+            <td class="py-3 px-4">${{ "%.2f"|format(s.close_price) }}</td>
+            <td class="py-3 px-4">${{ "%.2f"|format(s.or_low) }} - ${{ "%.2f"|format(s.or_high) }}</td>
+            <td class="py-3 px-4">${{ "%.2f"|format(s.atr) }}</td>
+            <td class="py-3 px-4">
+              <span class="px-2 py-0.5 rounded text-[10px] font-sans font-bold
+                {% if s.status == 'EXECUTED' %}bg-emerald-500/20 text-emerald-400 border border-emerald-500/30
+                {% elif s.status == 'AWAITING_APPROVAL' %}bg-amber-500/20 text-amber-400 border border-amber-500/30 animate-pulse
+                {% elif s.status == 'REJECTED' %}bg-rose-500/20 text-rose-400 border border-rose-500/30
+                {% else %}bg-slate-700 text-slate-300{% endif %}">
+                {{ s.status }}
+              </span>
+            </td>
+            <td class="py-3 px-4 text-slate-400 font-sans text-xs">
+              {% if s.status == 'AWAITING_APPROVAL' %}
+              <div class="flex gap-2 font-mono">
+                <form action="/api/signals/approve" method="POST" class="inline">
+                  <input type="hidden" name="signal_id" value="{{ s.id }}">
+                  <button type="submit" class="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[10px] font-bold">Approve</button>
+                </form>
+                <form action="/api/signals/reject" method="POST" class="inline">
+                  <input type="hidden" name="signal_id" value="{{ s.id }}">
+                  <button type="submit" class="px-2 py-0.5 bg-rose-600 hover:bg-rose-500 text-white rounded text-[10px] font-bold">Reject</button>
+                </form>
+              </div>
+              {% else %}
+              {{ s.rejection_reason or '-' }}
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="py-6 text-center text-slate-500 font-sans">No signals received yet today.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

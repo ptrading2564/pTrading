@@ -1,0 +1,24 @@
+# Caddy Reverse Proxy Configuration for pTrading
+# Zero-config automatic TLS (Let's Encrypt / ZeroSSL)
+
+{$DOMAIN_NAME:trading2564.com} {
+    # Encode with modern gzip & zstd
+    encode gzip zstd
+
+    # Logging
+    log {
+        output file /var/log/caddy/ptrading_access.log {
+            roll_size 20mb
+            roll_keep 5
+        }
+    }
+
+    # Reverse proxy to Docker FastAPI container
+    reverse_proxy 127.0.0.1:8000 {
+        # Pass real client IP so TradingView IP verification works
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}

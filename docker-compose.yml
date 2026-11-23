@@ -1,0 +1,22 @@
+services:
+  ptrading-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ptrading-app
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DATABASE_PATH=/app/data/ptrading.db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"

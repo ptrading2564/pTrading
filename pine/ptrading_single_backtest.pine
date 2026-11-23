@@ -1,0 +1,122 @@
+//@version=6
+strategy("pTrading Single-Symbol Momentum Backtester [v6]", overlay=true, initial_capital=50000, default_qty_type=strategy.cash, default_qty_value=250, currency=currency.USD, process_orders_on_close=true)
+
+// ==============================================================================
+// 1. INPUT PARAMETERS
+// ==============================================================================
+grp_strat = "Strategy Risk & Parameters"
+i_risk_pct = input.float(0.5, "Risk % Per Trade", minval=0.1, step=0.1, group=grp_strat)
+i_max_equity_pct = input.float(25.0, "Max Capital % Per Position", minval=5.0, maxval=100.0, group=grp_strat)
+i_rvol_mult = input.float(1.5, "Min RVOL Multiplier", minval=1.0, step=0.1, group=grp_strat)
+i_atr_len = input.int(14, "ATR Length", minval=1, group=grp_strat)
+i_max_ext = input.float(0.75, "Max ATR Extension Above OR High", minval=0.1, step=0.05, group=grp_strat)
+i_require_market_gate = input.bool(true, "Require SPY & QQQ > VWAP", group=grp_strat)
+
+// ==============================================================================
+// 2. TIMING & SESSION WINDOWS (Eastern Time)
+// ==============================================================================
+t_is_or = not na(time(timeframe.period, "0930-0945:23456", "America/New_York"))
+t_is_entry_window = not na(time(timeframe.period, "0945-1500:23456", "America/New_York"))
+t_is_flatten_time = not na(time(timeframe.period, "1555-1600:23456", "America/New_York"))
+
+// Daily session tracking
+var float or_high = na
+var float or_low = na
+var int last_trade_day = na
+
+cur_day = dayofmonth(time("America/New_York"))
+is_new_day = cur_day != last_trade_day
+
+if is_new_day
+    or_high := na
+    or_low := na
+    last_trade_day := cur_day
+
+if t_is_or
+    or_high := na(or_high) ? high : math.max(or_high, high)
+    or_low := na(or_low) ? low : math.min(or_low, low)
+
+// ==============================================================================
+// 3. TECHNICAL INDICATORS & MARKET GATES
+// ==============================================================================
+cur_vwap = ta.vwap
+cur_atr = ta.atr(i_atr_len)
+vol_sma = ta.sma(volume, 20)
+rvol = vol_sma > 0 ? (volume / vol_sma) : 1.0
+
+[spy_c, spy_vwap] = request.security("AMEX:SPY", "5", [close, ta.vwap])
+[qqq_c, qqq_vwap] = request.security("NASDAQ:QQQ", "5", [close, ta.vwap])
+market_ok = not i_require_market_gate or (spy_c >= spy_vwap and qqq_c >= qqq_vwap)
+
+// Breakout Entry Conditions
+bullish_close = close > open
+ext_ok = not na(or_high) and ((close - or_high) <= (i_max_ext * cur_atr))
+entry_condition = t_is_entry_window and not na(or_high) and (close > or_high) and (close > cur_vwap) and bullish_close and (rvol >= i_rvol_mult) and ext_ok and market_ok
+
+// ==============================================================================
+// 4. POSITION SIZING & BRACKET LIFECYCLE
+// ==============================================================================
+var float pos_entry_price = na
+var float pos_initial_stop = na
+var float pos_active_stop = na
+var float pos_take_profit = na
+var float pos_1r = na
+var bool be_stepped = false
+
+if entry_condition and strategy.position_size == 0
+    // Dynamic stop: max(OR_Low, close - 1.5 * ATR)
+    calc_stop = math.max(or_low, close - 1.5 * cur_atr)
+    calc_stop := math.round(calc_stop, 2)
+    stop_dist = close - calc_stop
+
+    if stop_dist >= 0.10
+        risk_dollars = strategy.equity * (i_risk_pct / 100.0)
+        raw_shares = math.floor(risk_dollars / stop_dist)
+
+        // 25% max capital cap
+        max_shares = math.floor((strategy.equity * (i_max_equity_pct / 100.0)) / close)
+        shares = math.min(raw_shares, max_shares)
+
+        if shares > 0
+            pos_entry_price := close
+            pos_initial_stop := calc_stop
+            pos_active_stop := calc_stop
+            pos_1r := stop_dist
+            pos_take_profit := math.round(close + 2.0 * stop_dist, 2)
+            be_stepped := false
+
+            strategy.entry("Long_Breakout", strategy.long, qty=shares)
+
+// ==============================================================================
+// 5. BREAKEVEN STEP & EXITS
+// ==============================================================================
+if strategy.position_size > 0
+    // Step stop to Breakeven (+0.02) when price hits +1.0R
+    if not be_stepped and high >= (pos_entry_price + pos_1r)
+        pos_active_stop := math.round(pos_entry_price + 0.02, 2)
+        be_stepped := true
+
+    // Check Take-Profit (+2.0R) or Stop-Loss / Breakeven
+    strategy.exit("Bracket_Exit", from_entry="Long_Breakout", stop=pos_active_stop, limit=pos_take_profit)
+
+// EOD Flatten at 15:55 ET (Zero overnight gap risk)
+if t_is_flatten_time and strategy.position_size > 0
+    strategy.close("Long_Breakout", comment="EOD_FLATTEN")
+
+// Reset state when flat
+if strategy.position_size == 0
+    pos_entry_price := na
+    pos_active_stop := na
+    pos_take_profit := na
+    be_stepped := false
+
+// ==============================================================================
+// 6. VISUAL PLOTS
+// ==============================================================================
+plot(or_high, "Opening Range High", color=color.new(color.green, 20), linewidth=2, style=plot.style_linebr)
+plot(or_low,  "Opening Range Low",  color=color.new(color.red, 20),   linewidth=2, style=plot.style_linebr)
+plot(cur_vwap, "Intraday VWAP",      color=color.new(color.orange, 30), linewidth=1)
+plot(pos_active_stop, "Active Stop Loss", color=color.maroon, linewidth=2, style=plot.style_linebr)
+plot(pos_take_profit, "Take Profit (+2R)", color=color.teal,   linewidth=2, style=plot.style_linebr)
+
+plotshape(entry_condition and strategy.position_size == 0, "Long Breakout", shape.triangleup, location.belowbar, color.green, size=size.small)

@@ -1,0 +1,287 @@
+//@version=6
+indicator("pTrading 38-Symbol Momentum Breakout Scanner [v6]", overlay=true, max_labels_count=500)
+
+// ==============================================================================
+// 1. INPUT CONFIGURATION
+// ==============================================================================
+grp_sec = "Webhook Security & Parameters"
+i_secret = input.string("your_super_secret_webhook_token_here_change_me", "Webhook Secret Token", group=grp_sec)
+i_rvol_mult = input.float(1.5, "Min RVOL Multiplier", minval=1.0, step=0.1, group=grp_sec)
+i_atr_len = input.int(14, "ATR Length", minval=1, group=grp_sec)
+i_max_ext = input.float(0.75, "Max ATR Extension Above OR High", minval=0.1, step=0.05, group=grp_sec)
+i_require_spy_qqq = input.bool(true, "Require SPY & QQQ > VWAP", group=grp_sec)
+
+grp_basket = "Daily 38-Symbol Basket (ChartMill Import)"
+s01 = input.string("NVDA", "01", group=grp_basket, inline="r1")
+s02 = input.string("TSLA", "02", group=grp_basket, inline="r1")
+s03 = input.string("AMD",  "03", group=grp_basket, inline="r1")
+s04 = input.string("PLTR", "04", group=grp_basket, inline="r1")
+s05 = input.string("SMCI", "05", group=grp_basket, inline="r1")
+
+s06 = input.string("ARM",  "06", group=grp_basket, inline="r2")
+s07 = input.string("AVGO", "07", group=grp_basket, inline="r2")
+s08 = input.string("META", "08", group=grp_basket, inline="r2")
+s09 = input.string("AMZN", "09", group=grp_basket, inline="r2")
+s10 = input.string("MSFT", "10", group=grp_basket, inline="r2")
+
+s11 = input.string("AAPL", "11", group=grp_basket, inline="r3")
+s12 = input.string("GOOGL","12", group=grp_basket, inline="r3")
+s13 = input.string("NFLX", "13", group=grp_basket, inline="r3")
+s14 = input.string("COIN", "14", group=grp_basket, inline="r3")
+s15 = input.string("HOOD", "15", group=grp_basket, inline="r3")
+
+s16 = input.string("MSTR", "16", group=grp_basket, inline="r4")
+s17 = input.string("APP",  "17", group=grp_basket, inline="r4")
+s18 = input.string("RDDT", "18", group=grp_basket, inline="r4")
+s19 = input.string("CAVA", "19", group=grp_basket, inline="r4")
+s20 = input.string("DKNG", "20", group=grp_basket, inline="r4")
+
+s21 = input.string("UBER", "21", group=grp_basket, inline="r5")
+s22 = input.string("CRWD", "22", group=grp_basket, inline="r5")
+s23 = input.string("PANW", "23", group=grp_basket, inline="r5")
+s24 = input.string("SNOW", "24", group=grp_basket, inline="r5")
+s25 = input.string("DDOG", "25", group=grp_basket, inline="r5")
+
+s26 = input.string("NET",  "26", group=grp_basket, inline="r6")
+s27 = input.string("ZS",   "27", group=grp_basket, inline="r6")
+s28 = input.string("CELH", "28", group=grp_basket, inline="r6")
+s29 = input.string("ONON", "29", group=grp_basket, inline="r6")
+s30 = input.string("DECK", "30", group=grp_basket, inline="r6")
+
+s31 = input.string("ANET", "31", group=grp_basket, inline="r7")
+s32 = input.string("VRT",  "32", group=grp_basket, inline="r7")
+s33 = input.string("GEV",  "33", group=grp_basket, inline="r7")
+s34 = input.string("CEG",  "34", group=grp_basket, inline="r7")
+s35 = input.string("VST",  "35", group=grp_basket, inline="r7")
+
+s36 = input.string("DUOL", "36", group=grp_basket, inline="r8")
+s37 = input.string("HIMS", "37", group=grp_basket, inline="r8")
+s38 = input.string("BROS", "38", group=grp_basket, inline="r8")
+
+// ==============================================================================
+// 2. MARKET HEALTH GATES (SPY & QQQ VWAP) -> 2 security calls
+// ==============================================================================
+calc_vwap() =>
+    ta.vwap
+
+calc_vol_sma20() =>
+    ta.sma(volume, 20)
+
+calc_atr14() =>
+    ta.atr(i_atr_len)
+
+// SPY & QQQ Security queries
+[spy_c, spy_vwap] = request.security("AMEX:SPY", "5", [close, ta.vwap])
+[qqq_c, qqq_vwap] = request.security("NASDAQ:QQQ", "5", [close, ta.vwap])
+
+spy_healthy = spy_c >= spy_vwap
+qqq_healthy = qqq_c >= qqq_vwap
+market_gate_pass = not i_require_spy_qqq or (spy_healthy and qqq_healthy)
+
+// Time & Session definitions (US Eastern Time)
+t_is_or = not na(time(timeframe.period, "0930-0945:23456", "America/New_York"))
+t_is_entry_window = not na(time(timeframe.period, "0945-1500:23456", "America/New_York"))
+
+// ==============================================================================
+// 3. CANDIDATE EVALUATION FUNCTION (Request Security Tuple)
+// ==============================================================================
+f_eval_symbol(sym) =>
+    if sym == "" or str.length(sym) == 0
+        [0.0, 0.0, 0.0, 0.0, false]
+    else
+        [c, o, h, l, v, v_sma, cur_vwap, cur_atr] = request.security(
+             sym, "5", [close, open, high, low, volume, ta.sma(volume, 20), ta.vwap, ta.atr(14)]
+             )
+
+        // Session OR calculation inside security context
+        var float sym_or_h = na
+        var float sym_or_l = na
+        var int last_day = na
+
+        cur_day = dayofmonth(time("America/New_York"))
+        if cur_day != last_day
+            sym_or_h := na
+            sym_or_l := na
+            last_day := cur_day
+
+        in_or = not na(time(timeframe.period, "0930-0945:23456", "America/New_York"))
+        in_trade = not na(time(timeframe.period, "0945-1500:23456", "America/New_York"))
+
+        if in_or
+            sym_or_h := na(sym_or_h) ? h : math.max(sym_or_h, h)
+            sym_or_l := na(sym_or_l) ? l : math.min(sym_or_l, l)
+
+        rvol = v_sma > 0 ? (v / v_sma) : 1.0
+        bullish_close = c > o
+        ext_ok = not na(sym_or_h) and ((c - sym_or_h) <= (i_max_ext * cur_atr))
+
+        signal = in_trade and not na(sym_or_h) and (c > sym_or_h) and (c > cur_vwap) and bullish_close and (rvol >= i_rvol_mult) and ext_ok
+
+        [c, sym_or_h, sym_or_l, cur_atr, signal]
+
+// ==============================================================================
+// 4. SECURITY QUERIES (38 BASKET SYMBOLS) -> Exactly 38 Security Calls
+// Total Security Calls in Script = 2 (SPY+QQQ) + 38 (Basket) = 40 (TV Maximum)
+// ==============================================================================
+[c01, or_h01, or_l01, atr01, sig01] = f_eval_symbol(s01)
+[c02, or_h02, or_l02, atr02, sig02] = f_eval_symbol(s02)
+[c03, or_h03, or_l03, atr03, sig03] = f_eval_symbol(s03)
+[c04, or_h04, or_l04, atr04, sig04] = f_eval_symbol(s04)
+[c05, or_h05, or_l05, atr05, sig05] = f_eval_symbol(s05)
+
+[c06, or_h06, or_l06, atr06, sig06] = f_eval_symbol(s06)
+[c07, or_h07, or_l07, atr07, sig07] = f_eval_symbol(s07)
+[c08, or_h08, or_l08, atr08, sig08] = f_eval_symbol(s08)
+[c09, or_h09, or_l09, atr09, sig09] = f_eval_symbol(s09)
+[c10, or_h10, or_l10, atr10, sig10] = f_eval_symbol(s10)
+
+[c11, or_h11, or_l11, atr11, sig11] = f_eval_symbol(s11)
+[c12, or_h12, or_l12, atr12, sig12] = f_eval_symbol(s12)
+[c13, or_h13, or_l13, atr13, sig13] = f_eval_symbol(s13)
+[c14, or_h14, or_l14, atr14, sig14] = f_eval_symbol(s14)
+[c15, or_h15, or_l15, atr15, sig15] = f_eval_symbol(s15)
+
+[c16, or_h16, or_l16, atr16, sig16] = f_eval_symbol(s16)
+[c17, or_h17, or_l17, atr17, sig17] = f_eval_symbol(s17)
+[c18, or_h18, or_l18, atr18, sig18] = f_eval_symbol(s18)
+[c19, or_h19, or_l19, atr19, sig19] = f_eval_symbol(s19)
+[c20, or_h20, or_l20, atr20, sig20] = f_eval_symbol(s20)
+
+[c21, or_h21, or_l21, atr21, sig21] = f_eval_symbol(s21)
+[c22, or_h22, or_l22, atr22, sig22] = f_eval_symbol(s22)
+[c23, or_h23, or_l23, atr23, sig23] = f_eval_symbol(s23)
+[c24, or_h24, or_l24, atr24, sig24] = f_eval_symbol(s24)
+[c25, or_h25, or_l25, atr25, sig25] = f_eval_symbol(s25)
+
+[c26, or_h26, or_l26, atr26, sig26] = f_eval_symbol(s26)
+[c27, or_h27, or_l27, atr27, sig27] = f_eval_symbol(s27)
+[c28, or_h28, or_l28, atr28, sig28] = f_eval_symbol(s28)
+[c29, or_h29, or_l29, atr29, sig29] = f_eval_symbol(s29)
+[c30, or_h30, or_l30, atr30, sig30] = f_eval_symbol(s30)
+
+[c31, or_h31, or_l31, atr31, sig31] = f_eval_symbol(s31)
+[c32, or_h32, or_l32, atr32, sig32] = f_eval_symbol(s32)
+[c33, or_h33, or_l33, atr33, sig33] = f_eval_symbol(s33)
+[c34, or_h34, or_l34, atr34, sig34] = f_eval_symbol(s34)
+[c35, or_h35, or_l35, atr35, sig35] = f_eval_symbol(s35)
+
+[c36, or_h36, or_l36, atr36, sig36] = f_eval_symbol(s36)
+[c37, or_h37, or_l37, atr37, sig37] = f_eval_symbol(s37)
+[c38, or_h38, or_l38, atr38, sig38] = f_eval_symbol(s38)
+
+// ==============================================================================
+// 5. CONSOLIDATED JSON ARRAY WEBHOOK BUILDER
+// ==============================================================================
+f_make_item(sym, c, or_h, or_l, atr, bar_t) =>
+    "{\"symbol\":\"" + sym + "\",\"close\":" + str.tostring(c, "#.##") + ",\"or_high\":" + str.tostring(or_h, "#.##") + ",\"or_low\":" + str.tostring(or_l, "#.##") + ",\"atr\":" + str.tostring(atr, "#.##") + ",\"bar_time\":" + str.tostring(bar_t) + ",\"secret\":\"" + i_secret + "\"}"
+
+var string[] signal_items = array.new_string()
+array.clear(signal_items)
+
+// Collect active breakout signals gated by Market Health
+if barstate.isconfirmed and market_gate_pass
+    if sig01
+        array.push(signal_items, f_make_item(s01, c01, or_h01, or_l01, atr01, time))
+    if sig02
+        array.push(signal_items, f_make_item(s02, c02, or_h02, or_l02, atr02, time))
+    if sig03
+        array.push(signal_items, f_make_item(s03, c03, or_h03, or_l03, atr03, time))
+    if sig04
+        array.push(signal_items, f_make_item(s04, c04, or_h04, or_l04, atr04, time))
+    if sig05
+        array.push(signal_items, f_make_item(s05, c05, or_h05, or_l05, atr05, time))
+
+    if sig06
+        array.push(signal_items, f_make_item(s06, c06, or_h06, or_l06, atr06, time))
+    if sig07
+        array.push(signal_items, f_make_item(s07, c07, or_h07, or_l07, atr07, time))
+    if sig08
+        array.push(signal_items, f_make_item(s08, c08, or_h08, or_l08, atr08, time))
+    if sig09
+        array.push(signal_items, f_make_item(s09, c09, or_h09, or_l09, atr09, time))
+    if sig10
+        array.push(signal_items, f_make_item(s10, c10, or_h10, or_l10, atr10, time))
+
+    if sig11
+        array.push(signal_items, f_make_item(s11, c11, or_h11, or_l11, atr11, time))
+    if sig12
+        array.push(signal_items, f_make_item(s12, c12, or_h12, or_l12, atr12, time))
+    if sig13
+        array.push(signal_items, f_make_item(s13, c13, or_h13, or_l13, atr13, time))
+    if sig14
+        array.push(signal_items, f_make_item(s14, c14, or_h14, or_l14, atr14, time))
+    if sig15
+        array.push(signal_items, f_make_item(s15, c15, or_h15, or_l15, atr15, time))
+
+    if sig16
+        array.push(signal_items, f_make_item(s16, c16, or_h16, or_l16, atr16, time))
+    if sig17
+        array.push(signal_items, f_make_item(s17, c17, or_h17, or_l17, atr17, time))
+    if sig18
+        array.push(signal_items, f_make_item(s18, c18, or_h18, or_l18, atr18, time))
+    if sig19
+        array.push(signal_items, f_make_item(s19, c19, or_h19, or_l19, atr19, time))
+    if sig20
+        array.push(signal_items, f_make_item(s20, c20, or_h20, or_l20, atr20, time))
+
+    if sig21
+        array.push(signal_items, f_make_item(s21, c21, or_h21, or_l21, atr21, time))
+    if sig22
+        array.push(signal_items, f_make_item(s22, c22, or_h22, or_l22, atr22, time))
+    if sig23
+        array.push(signal_items, f_make_item(s23, c23, or_h23, or_l23, atr23, time))
+    if sig24
+        array.push(signal_items, f_make_item(s24, c24, or_h24, or_l24, atr24, time))
+    if sig25
+        array.push(signal_items, f_make_item(s25, c25, or_h25, or_l25, atr25, time))
+
+    if sig26
+        array.push(signal_items, f_make_item(s26, c26, or_h26, or_l26, atr26, time))
+    if sig27
+        array.push(signal_items, f_make_item(s27, c27, or_h27, or_l27, atr27, time))
+    if sig28
+        array.push(signal_items, f_make_item(s28, c28, or_h28, or_l28, atr28, time))
+    if sig29
+        array.push(signal_items, f_make_item(s29, c29, or_h29, or_l29, atr29, time))
+    if sig30
+        array.push(signal_items, f_make_item(s30, c30, or_h30, or_l30, atr30, time))
+
+    if sig31
+        array.push(signal_items, f_make_item(s31, c31, or_h31, or_l31, atr31, time))
+    if sig32
+        array.push(signal_items, f_make_item(s32, c32, or_h32, or_l32, atr32, time))
+    if sig33
+        array.push(signal_items, f_make_item(s33, c33, or_h33, or_l33, atr33, time))
+    if sig34
+        array.push(signal_items, f_make_item(s34, c34, or_h34, or_l34, atr34, time))
+    if sig35
+        array.push(signal_items, f_make_item(s35, c35, or_h35, or_l35, atr35, time))
+
+    if sig36
+        array.push(signal_items, f_make_item(s36, c36, or_h36, or_l36, atr36, time))
+    if sig37
+        array.push(signal_items, f_make_item(s37, c37, or_h37, or_l37, atr37, time))
+    if sig38
+        array.push(signal_items, f_make_item(s38, c38, or_h38, or_l38, atr38, time))
+
+// When 1 or more signals fire, consolidate into a single JSON array webhook
+if array.size(signal_items) > 0
+    payload = "[" + array.join(signal_items, ",") + "]"
+    alert(payload, alert.freq_once_per_bar_close)
+
+// ==============================================================================
+// 6. DASHBOARD STATUS TABLE ON CHART
+// ==============================================================================
+var table tbl = table.new(position.top_right, 2, 4, bgcolor=color.new(color.black, 20), border_color=color.gray, border_width=1)
+if barstate.islast
+    table.cell(tbl, 0, 0, "pTrading Scanner", bgcolor=color.navy, text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 0, "38-Basket", bgcolor=color.navy, text_color=color.white, text_size=size.small)
+
+    table.cell(tbl, 0, 1, "SPY > VWAP", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 1, spy_healthy ? "BULLISH" : "BEARISH", bgcolor=spy_healthy ? color.green : color.red, text_color=color.white, text_size=size.small)
+
+    table.cell(tbl, 0, 2, "QQQ > VWAP", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 2, qqq_healthy ? "BULLISH" : "BEARISH", bgcolor=qqq_healthy ? color.green : color.red, text_color=color.white, text_size=size.small)
+
+    table.cell(tbl, 0, 3, "Signals This Bar", text_color=color.white, text_size=size.small)
+    table.cell(tbl, 1, 3, str.tostring(array.size(signal_items)), bgcolor=array.size(signal_items) > 0 ? color.teal : color.gray, text_color=color.white, text_size=size.small)
