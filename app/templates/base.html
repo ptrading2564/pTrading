@@ -42,10 +42,10 @@
       <div class="flex items-center gap-4">
         <!-- Market Status Badge -->
         <div id="market-status-badge" class="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs">
-          <span class="w-2 h-2 rounded-full {% if is_market_open %}bg-emerald-400 animate-pulse{% else %}bg-slate-500{% endif %}"></span>
-          <span class="text-slate-300 font-medium">{% if is_market_open %}MARKET OPEN{% else %}MARKET CLOSED{% endif %}</span>
+          <span id="header-market-dot" class="w-2 h-2 rounded-full {% if is_market_open %}bg-emerald-400 animate-pulse{% else %}bg-slate-500{% endif %}"></span>
+          <span id="header-market-text" class="text-slate-300 font-medium">{% if is_market_open %}MARKET OPEN{% else %}MARKET CLOSED{% endif %}</span>
           <span class="text-slate-500">|</span>
-          <span class="text-slate-400">{{ current_time_et }} ET</span>
+          <span id="header-clock-et" class="text-slate-400 font-mono">{{ current_time_et }} ET</span>
         </div>
 
         <nav class="flex items-center gap-2 text-sm">
@@ -66,5 +66,179 @@
   <footer class="border-t border-slate-800 bg-slate-900/60 py-4 text-center text-xs text-slate-500">
     pTrading Engine &bull; Zero Overnight Gap Risk &bull; Alpaca Bracket Engine &bull; Dynamic ChartMill Basket
   </footer>
+
+  <!-- Reusable Interactive Symbol Chart Modal (Lightweight Charts + Alpaca 5m Bars + TradingView Link) -->
+  <div id="symbol-chart-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4" onclick="if(event.target===this) closeSymbolChart()">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden">
+      <div class="px-5 py-3.5 border-b border-slate-700/80 flex flex-wrap items-center justify-between gap-3 bg-slate-800/70">
+        <div class="flex items-center gap-3">
+          <span id="chart-modal-symbol" class="text-base font-bold text-white font-mono">SYMBOL</span>
+          <span id="chart-modal-date" class="text-xs font-mono text-slate-400"></span>
+          <span id="chart-modal-trade-badge" class="hidden text-xs font-mono px-2.5 py-0.5 rounded-full border"></span>
+        </div>
+        <div class="flex items-center gap-2">
+          <a id="chart-modal-tv-link" href="https://www.tradingview.com/chart/" target="_blank" rel="noopener noreferrer"
+             class="px-3 py-1.5 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-xs font-semibold transition">
+            Open in TradingView &nearr;
+          </a>
+          <button type="button" onclick="closeSymbolChart()" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition">
+            &times; Close
+          </button>
+        </div>
+      </div>
+
+      <div class="p-4">
+        <div id="chart-modal-legend" class="flex flex-wrap gap-3 text-[11px] font-mono text-slate-300 mb-2.5"></div>
+        <div id="chart-modal-status" class="text-xs text-slate-400 py-16 text-center hidden"></div>
+        <div id="chart-modal-canvas" class="w-full h-96"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <script>
+    let _ptChartInstance = null;
+
+    function closeSymbolChart() {
+      const modal = document.getElementById("symbol-chart-modal");
+      if (modal) {
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
+      }
+      if (_ptChartInstance) {
+        _ptChartInstance.remove();
+        _ptChartInstance = null;
+      }
+    }
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeSymbolChart();
+    });
+
+    async function openSymbolChart(symbol, dateStr) {
+      const modal = document.getElementById("symbol-chart-modal");
+      const symEl = document.getElementById("chart-modal-symbol");
+      const dateEl = document.getElementById("chart-modal-date");
+      const badgeEl = document.getElementById("chart-modal-trade-badge");
+      const tvLink = document.getElementById("chart-modal-tv-link");
+      const legendEl = document.getElementById("chart-modal-legend");
+      const statusEl = document.getElementById("chart-modal-status");
+      const canvasEl = document.getElementById("chart-modal-canvas");
+
+      symEl.textContent = symbol;
+      dateEl.textContent = dateStr ? `${dateStr} (5m ET)` : "5m ET";
+      badgeEl.classList.add("hidden");
+      legendEl.innerHTML = "";
+      tvLink.href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}`;
+
+      if (_ptChartInstance) {
+        _ptChartInstance.remove();
+        _ptChartInstance = null;
+      }
+      canvasEl.innerHTML = "";
+      canvasEl.classList.add("hidden");
+      statusEl.textContent = `Loading 5m Alpaca chart for ${symbol}...`;
+      statusEl.classList.remove("hidden");
+
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+
+      try {
+        const qs = dateStr ? `?date=${encodeURIComponent(dateStr)}` : "";
+        const res = await fetch(`/api/chart/${encodeURIComponent(symbol)}${qs}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        dateEl.textContent = `${data.date} (5m ET)`;
+        tvLink.href = data.tradingview_url;
+
+        if (!data.candles || data.candles.length === 0) {
+          statusEl.textContent = `No 5m intraday bars returned by Alpaca for ${symbol} on ${data.date}. Use "Open in TradingView" to view live charts.`;
+          return;
+        }
+
+        statusEl.classList.add("hidden");
+        canvasEl.classList.remove("hidden");
+
+        if (!window.LightweightCharts) {
+          statusEl.textContent = "Chart library failed to load. Use Open in TradingView.";
+          statusEl.classList.remove("hidden");
+          return;
+        }
+
+        _ptChartInstance = LightweightCharts.createChart(canvasEl, {
+          layout: { background: { color: "#0f172a" }, textColor: "#94a3b8" },
+          grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
+          crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+          rightPriceScale: { borderColor: "#334155" },
+          timeScale: { borderColor: "#334155", timeVisible: true, secondsVisible: false },
+          width: canvasEl.clientWidth,
+          height: 384,
+        });
+
+        const candleSeries = _ptChartInstance.addCandlestickSeries({
+          upColor: "#10b981",
+          downColor: "#f43f5e",
+          borderVisible: false,
+          wickUpColor: "#10b981",
+          wickDownColor: "#f43f5e",
+        });
+        candleSeries.setData(data.candles);
+
+        if (data.vwap && data.vwap.length) {
+          const vwapSeries = _ptChartInstance.addLineSeries({
+            color: "#f59e0b",
+            lineWidth: 2,
+            priceLineVisible: false,
+          });
+          vwapSeries.setData(data.vwap);
+        }
+
+        const legendParts = [`<span class="text-amber-400">&mdash; VWAP</span>`];
+        if (data.or_high != null) {
+          candleSeries.createPriceLine({ price: data.or_high, color: "#22c55e", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "OR High" });
+          legendParts.push(`<span class="text-emerald-400">OR High: $${data.or_high.toFixed(2)}</span>`);
+        }
+        if (data.or_low != null) {
+          candleSeries.createPriceLine({ price: data.or_low, color: "#ef4444", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "OR Low" });
+          legendParts.push(`<span class="text-rose-400">OR Low: $${data.or_low.toFixed(2)}</span>`);
+        }
+
+        const tr = data.trade;
+        if (tr) {
+          if (tr.entry_price != null) {
+            candleSeries.createPriceLine({ price: tr.entry_price, color: "#38bdf8", lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: "Entry" });
+            legendParts.push(`<span class="text-sky-400">Entry: $${Number(tr.entry_price).toFixed(2)}</span>`);
+          }
+          const stopP = tr.initial_stop_price || tr.stop_loss_price;
+          if (stopP != null) {
+            candleSeries.createPriceLine({ price: stopP, color: "#fb7185", lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: "Stop" });
+            legendParts.push(`<span class="text-rose-300">Stop: $${Number(stopP).toFixed(2)}</span>`);
+          }
+          if (tr.take_profit_price != null) {
+            candleSeries.createPriceLine({ price: tr.take_profit_price, color: "#2dd4bf", lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: "TP +2R" });
+            legendParts.push(`<span class="text-teal-300">TP: $${Number(tr.take_profit_price).toFixed(2)}</span>`);
+          }
+          if (tr.exit_price != null) {
+            candleSeries.createPriceLine({ price: tr.exit_price, color: "#c084fc", lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: tr.exit_reason || "Exit" });
+            legendParts.push(`<span class="text-purple-300">Exit: $${Number(tr.exit_price).toFixed(2)}</span>`);
+          }
+          if (tr.pnl_dollars != null) {
+            const pos = Number(tr.pnl_dollars) >= 0;
+            badgeEl.textContent = `${pos ? "+" : ""}$${Number(tr.pnl_dollars).toFixed(2)} (${tr.pnl_r != null ? (Number(tr.pnl_r) >= 0 ? "+" : "") + Number(tr.pnl_r).toFixed(2) + "R" : tr.exit_reason || "OPEN"})`;
+            badgeEl.className = `text-xs font-mono px-2.5 py-0.5 rounded-full border ${pos ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" : "bg-rose-500/15 text-rose-300 border-rose-500/40"}`;
+          } else if (tr.is_open) {
+            badgeEl.textContent = `ACTIVE POSITION (${tr.qty} sh)`;
+            badgeEl.className = "text-xs font-mono px-2.5 py-0.5 rounded-full border bg-sky-500/15 text-sky-300 border-sky-500/40";
+          }
+        }
+
+        legendEl.innerHTML = legendParts.join(" &bull; ");
+        _ptChartInstance.timeScale().fitContent();
+      } catch (err) {
+        statusEl.textContent = `Could not load chart data (${err.message}). Click "Open in TradingView" instead.`;
+      }
+    }
+  </script>
 </body>
 </html>

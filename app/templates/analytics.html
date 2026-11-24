@@ -364,7 +364,11 @@
           {% for t in closed_trades %}
           <tr class="hover:bg-slate-700/20 transition">
             <td class="py-3 px-4 text-slate-400 whitespace-nowrap">{{ t.trade_date or (t.entry_time or '')[:10] }}</td>
-            <td class="py-3 px-4 font-bold text-white">{{ t.symbol }}</td>
+            <td class="py-3 px-4 font-bold text-white">
+              <button type="button" onclick="openSymbolChart('{{ t.symbol }}', '{{ t.trade_date or (t.entry_time or '')[:10] }}')" class="text-sky-400 hover:text-sky-300 underline decoration-sky-500/40 underline-offset-2 transition">
+                {{ t.symbol }}
+              </button>
+            </td>
             <td class="py-3 px-4">{{ t.qty }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(t.entry_price) }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(t.exit_price or 0.0) }}</td>

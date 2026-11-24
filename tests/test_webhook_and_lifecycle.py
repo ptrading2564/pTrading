@@ -252,3 +252,19 @@ async def test_html_login_and_session_cookie_flow():
         res_authed = await client.get("/analytics", cookies=res_post.cookies)
         assert res_authed.status_code == 200
         assert "Daily Comprehensive Analysis" in res_authed.text
+
+
+@pytest.mark.asyncio
+async def test_live_dashboard_and_chart_api():
+    auth = (settings.DASHBOARD_USERNAME, settings.DASHBOARD_PASSWORD)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        res_live = await client.get("/api/dashboard/live", auth=auth)
+        assert res_live.status_code == 200
+        live_data = res_live.json()
+        assert "equity" in live_data and "positions" in live_data and "current_time_et" in live_data
+
+        res_chart = await client.get("/api/chart/NVDA", auth=auth)
+        assert res_chart.status_code == 200
+        chart_data = res_chart.json()
+        assert chart_data["symbol"] == "NVDA"
+        assert chart_data["tradingview_url"] == "https://www.tradingview.com/chart/?symbol=NVDA"

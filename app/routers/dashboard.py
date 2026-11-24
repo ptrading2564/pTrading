@@ -589,3 +589,194 @@ async def trigger_scanner_manual(username: str = Depends(authenticate_user)):
     logger.info("Manual scan triggered by %s. Results: %d", username, len(results))
     return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
 
+
+@router.get("/api/dashboard/live")
+async def get_dashboard_live_state(username: str = Depends(authenticate_user)):
+    """Lightweight JSON polling endpoint for dynamic in-place dashboard auto-refresh."""
+    tz = ZoneInfo(settings.MARKET_TIMEZONE)
+    now_et = datetime.now(tz)
+
+    try:
+        equity = await broker.get_account_equity()
+        positions = await broker.get_positions()
+        is_market_open = await broker.is_market_open()
+    except Exception as e:
+        logger.debug("Live dashboard poll broker fallback: %s", e)
+        equity = 50000.0
+        positions = []
+        is_market_open = False
+
+    starting_equity, _ = await risk_manager.get_or_initialize_daily_stats(equity)
+    daily_pnl = round(equity - starting_equity, 2)
+    daily_pnl_pct = round((daily_pnl / starting_equity) * 100.0, 2) if starting_equity > 0 else 0.0
+
+    recent_signals = await get_recent_signals(limit=25)
+    for sig in recent_signals:
+        raw_ts = sig.get("received_at")
+        if raw_ts:
+            try:
+                dt_utc = datetime.strptime(str(raw_ts)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
+                sig["received_at"] = dt_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S ET")
+            except Exception:
+                pass
+
+    try:
+        scanner_info = get_market_scanner().get_status_info()
+    except Exception:
+        scanner_info = {"status": "UNAVAILABLE", "market_health": {}}
+
+    return JSONResponse(
+        content={
+            "current_time_et": now_et.strftime("%H:%M:%S"),
+            "today_date": now_et.strftime("%Y-%m-%d"),
+            "is_market_open": is_market_open,
+            "equity": round(equity, 2),
+            "starting_equity": round(starting_equity, 2),
+            "daily_pnl": daily_pnl,
+            "daily_pnl_pct": daily_pnl_pct,
+            "max_positions": settings.MAX_CONCURRENT_POSITIONS,
+            "scanner_info": scanner_info,
+            "positions": [
+                {
+                    "symbol": p.symbol,
+                    "qty": p.qty,
+                    "entry_price": round(float(p.entry_price), 2),
+                    "current_price": round(float(p.current_price), 2),
+                    "market_value": round(float(p.market_value), 2),
+                    "unrealized_pnl": round(float(p.unrealized_pnl), 2),
+                }
+                for p in positions
+            ],
+            "recent_signals": [
+                {
+                    "id": s["id"],
+                    "received_at": s["received_at"],
+                    "symbol": s["symbol"],
+                    "close_price": round(float(s["close_price"]), 2),
+                    "or_low": round(float(s["or_low"]), 2),
+                    "or_high": round(float(s["or_high"]), 2),
+                    "atr": round(float(s["atr"]), 2),
+                    "status": s["status"],
+                    "rejection_reason": s.get("rejection_reason") or "",
+                }
+                for s in recent_signals
+            ],
+        }
+    )
+
+
+@router.get("/api/chart/{symbol}")
+async def get_symbol_chart_data(
+    symbol: str,
+    date: Optional[str] = None,
+    username: str = Depends(authenticate_user),
+):
+    """Returns 5m Alpaca candlesticks, running VWAP, OR High/Low, and trade overlays for a symbol."""
+    from datetime import time as dt_time
+
+    clean_sym = "".join(ch for ch in symbol.upper().strip() if ch.isalnum() or ch in (".", "-"))
+    if not clean_sym:
+        raise HTTPException(status_code=400, detail="Invalid symbol")
+
+    tz = ZoneInfo(settings.MARKET_TIMEZONE)
+    now_et = datetime.now(tz)
+    target_date_str = date or now_et.strftime("%Y-%m-%d")
+    try:
+        target_day = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        target_day = now_et.date()
+        target_date_str = target_day.strftime("%Y-%m-%d")
+
+    session_start = datetime.combine(target_day, dt_time(9, 30), tzinfo=tz)
+    session_end = datetime.combine(target_day, dt_time(16, 0), tzinfo=tz)
+
+    scanner = get_market_scanner()
+    bars = []
+    try:
+        bars_map = await scanner.fetch_bars_multi([clean_sym], session_start, session_end)
+        bars = bars_map.get(clean_sym, [])
+        # If empty (e.g., pre-market or weekend), fall back to most recent trading session in last 5 days
+        if not bars:
+            fallback_start = datetime.combine(target_day - timedelta(days=5), dt_time(9, 30), tzinfo=tz)
+            fb_map = await scanner.fetch_bars_multi([clean_sym], fallback_start, session_end)
+            fb_bars = fb_map.get(clean_sym, [])
+            if fb_bars:
+                last_day = fb_bars[-1].timestamp.astimezone(tz).date()
+                target_date_str = last_day.strftime("%Y-%m-%d")
+                bars = [b for b in fb_bars if b.timestamp.astimezone(tz).date() == last_day]
+    except Exception as e:
+        logger.warning("Failed to fetch chart bars for %s: %s", clean_sym, e)
+
+    candles = []
+    vwap_series = []
+    cum_vol = 0.0
+    cum_tp_vol = 0.0
+    or_high = None
+    or_low = None
+
+    for b in bars:
+        bt_et = b.timestamp.astimezone(tz)
+        # Shift epoch by ET UTC offset so Lightweight Charts displays Eastern Time on the X-axis
+        offset_sec = int(bt_et.utcoffset().total_seconds()) if bt_et.utcoffset() else 0
+        ts = int(b.timestamp.timestamp()) + offset_sec
+        o_p, h_p, l_p, c_p = float(b.open), float(b.high), float(b.low), float(b.close)
+        vol = float(b.volume or 0)
+
+        candles.append({"time": ts, "open": round(o_p, 2), "high": round(h_p, 2), "low": round(l_p, 2), "close": round(c_p, 2)})
+
+        if vol > 0:
+            tp = (h_p + l_p + c_p) / 3.0
+            cum_vol += vol
+            cum_tp_vol += tp * vol
+        vwap_val = (cum_tp_vol / cum_vol) if cum_vol > 0 else c_p
+        vwap_series.append({"time": ts, "value": round(vwap_val, 2)})
+
+        if dt_time(9, 30) <= bt_et.time() < dt_time(9, 45):
+            or_high = h_p if or_high is None else max(or_high, h_p)
+            or_low = l_p if or_low is None else min(or_low, l_p)
+
+    # Fetch matching trade & signal overlays from DB for this symbol and date
+    trade_overlay = None
+    async with get_connection() as conn:
+        t_row = await (
+            await conn.execute(
+                """
+                SELECT entry_price, stop_loss_price, initial_stop_price, take_profit_price,
+                       exit_price, exit_reason, pnl_dollars, pnl_r, is_open, qty
+                FROM trades
+                WHERE symbol = ? AND COALESCE(trade_date, substr(entry_time, 1, 10)) = ?
+                ORDER BY id DESC LIMIT 1;
+                """,
+                (clean_sym, target_date_str),
+            )
+        ).fetchone()
+        if t_row:
+            trade_overlay = dict(t_row)
+
+        if or_high is None or or_low is None:
+            s_row = await (
+                await conn.execute(
+                    """
+                    SELECT or_high, or_low FROM signals
+                    WHERE symbol = ? ORDER BY id DESC LIMIT 1;
+                    """,
+                    (clean_sym,),
+                )
+            ).fetchone()
+            if s_row:
+                or_high = float(s_row["or_high"])
+                or_low = float(s_row["or_low"])
+
+    return JSONResponse(
+        content={
+            "symbol": clean_sym,
+            "date": target_date_str,
+            "candles": candles,
+            "vwap": vwap_series,
+            "or_high": round(or_high, 2) if or_high is not None else None,
+            "or_low": round(or_low, 2) if or_low is not None else None,
+            "trade": trade_overlay,
+            "tradingview_url": f"https://www.tradingview.com/chart/?symbol={clean_sym}",
+        }
+    )
+

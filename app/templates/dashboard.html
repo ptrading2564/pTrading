@@ -21,8 +21,13 @@
       </form>
     </div>
 
-    <!-- Kill Switch & Flatten Controls -->
-    <div class="flex items-center gap-3">
+    <!-- Kill Switch, Live Refresh & Flatten Controls -->
+    <div class="flex flex-wrap items-center gap-3">
+      <button id="auto-refresh-toggle" type="button" onclick="toggleDashboardAutoRefresh()"
+              class="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition hover:bg-emerald-500/25">
+        <span id="auto-refresh-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span id="auto-refresh-label">Live Auto-Refresh</span>
+      </button>
       {% if kill_switch == 'ON' %}
       <div class="px-3 py-1.5 bg-rose-500/20 border border-rose-500 text-rose-300 rounded-lg text-xs font-bold animate-pulse">
         KILL-SWITCH ACTIVE (TRADING HALTED)
@@ -54,20 +59,20 @@
       <div>
         <div class="flex items-center gap-2">
           <span class="text-sm uppercase tracking-wider font-extrabold text-sky-200">Automated Server Scanner (Option 3)</span>
-          <span class="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40 animate-pulse">
+          <span id="scanner-status-pill" class="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-sky-500/20 text-sky-300 border border-sky-500/40 animate-pulse">
             {{ scanner_info.status or "ACTIVE" }}
           </span>
         </div>
         <p class="text-xs text-slate-300 mt-1">
           Active Universe: <strong class="text-white">{{ basket_count or "All Qualified" }} momentum stocks</strong> &bull; SPY Market Gate:
-          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold {% if scanner_info.market_health.spy_healthy %}bg-emerald-500/20 text-emerald-300 border border-emerald-500/30{% else %}bg-rose-500/20 text-rose-300 border border-rose-500/30{% endif %}">
+          <span id="scanner-spy-badge" class="px-1.5 py-0.5 rounded text-[10px] font-bold {% if scanner_info.market_health.spy_healthy %}bg-emerald-500/20 text-emerald-300 border border-emerald-500/30{% else %}bg-rose-500/20 text-rose-300 border border-rose-500/30{% endif %}">
             SPY {{ "BULLISH" if scanner_info.market_health.spy_healthy else "BEARISH" }}
           </span>
           &bull; QQQ Market Gate:
-          <span class="px-1.5 py-0.5 rounded text-[10px] font-bold {% if scanner_info.market_health.qqq_healthy %}bg-emerald-500/20 text-emerald-300 border border-emerald-500/30{% else %}bg-rose-500/20 text-rose-300 border border-rose-500/30{% endif %}">
+          <span id="scanner-qqq-badge" class="px-1.5 py-0.5 rounded text-[10px] font-bold {% if scanner_info.market_health.qqq_healthy %}bg-emerald-500/20 text-emerald-300 border border-emerald-500/30{% else %}bg-rose-500/20 text-rose-300 border border-rose-500/30{% endif %}">
             QQQ {{ "BULLISH" if scanner_info.market_health.qqq_healthy else "BEARISH" }}
           </span>
-          {% if scanner_info.last_scan_time %}&bull; <span class="text-slate-400">Last Scan: {{ scanner_info.last_scan_time }} ET</span>{% endif %}
+          <span id="scanner-last-scan" class="text-slate-400">{% if scanner_info.last_scan_time %}&bull; Last Scan: {{ scanner_info.last_scan_time }} ET{% endif %}</span>
         </p>
       </div>
     </div>
@@ -84,14 +89,14 @@
     <!-- Live Equity -->
     <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow">
       <div class="text-xs uppercase tracking-wider text-slate-400 font-medium">Live Equity</div>
-      <div class="text-2xl font-bold text-white mt-1">${{ "%.2f"|format(equity) }}</div>
-      <div class="text-xs text-slate-400 mt-1">Starting Today: ${{ "%.2f"|format(starting_equity) }}</div>
+      <div id="live-equity" class="text-2xl font-bold text-white mt-1 font-mono">${{ "{:,.2f}".format(equity) }}</div>
+      <div id="live-starting-equity" class="text-xs text-slate-400 mt-1 font-mono">Starting Today: ${{ "{:,.2f}".format(starting_equity) }}</div>
     </div>
 
     <!-- Daily P&L -->
     <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow">
       <div class="text-xs uppercase tracking-wider text-slate-400 font-medium">Today's P&L</div>
-      <div class="text-2xl font-bold mt-1 {% if daily_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+      <div id="live-daily-pnl" class="text-2xl font-bold mt-1 font-mono {% if daily_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
         {% if daily_pnl >= 0 %}+{% endif %}${{ "%.2f"|format(daily_pnl) }} ({{ "%.2f"|format(daily_pnl_pct) }}%)
       </div>
       <div class="text-xs text-slate-400 mt-1">Daily Limit: -{{ daily_breaker_limit }}% Circuit Breaker</div>
@@ -100,7 +105,7 @@
     <!-- Open Positions -->
     <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow">
       <div class="text-xs uppercase tracking-wider text-slate-400 font-medium">Active Positions</div>
-      <div class="text-2xl font-bold text-white mt-1">{{ positions|length }} / {{ max_positions }} Max</div>
+      <div id="live-positions-count" class="text-2xl font-bold text-white mt-1">{{ positions|length }} / {{ max_positions }} Max</div>
       <div class="text-xs text-slate-400 mt-1">0.5% Compounding Risk per Trade</div>
     </div>
 
@@ -115,8 +120,8 @@
   <!-- Active Positions Table -->
   <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
     <div class="p-4 border-b border-slate-700/60 flex items-center justify-between">
-      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-200">Open Positions ({{ positions|length }})</h2>
-      <span class="text-xs text-slate-400">Target +2.0R &bull; Breakeven Step at +1.0R</span>
+      <h2 id="live-positions-heading" class="text-sm font-bold uppercase tracking-wider text-slate-200">Open Positions ({{ positions|length }})</h2>
+      <span class="text-xs text-slate-400">Target +2.0R &bull; Breakeven Step at +1.0R &bull; Click symbol for chart</span>
     </div>
     <div class="overflow-x-auto">
       <table class="w-full text-left text-xs">
@@ -131,10 +136,14 @@
             <th class="py-3 px-4">Status</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-slate-700/40 font-mono">
+        <tbody id="live-positions-tbody" class="divide-y divide-slate-700/40 font-mono">
           {% for p in positions %}
           <tr class="hover:bg-slate-700/20 transition">
-            <td class="py-3 px-4 font-bold text-white">{{ p.symbol }}</td>
+            <td class="py-3 px-4 font-bold text-white">
+              <button type="button" onclick="openSymbolChart('{{ p.symbol }}')" class="text-sky-400 hover:text-sky-300 underline decoration-sky-500/40 underline-offset-2 transition">
+                {{ p.symbol }}
+              </button>
+            </td>
             <td class="py-3 px-4">{{ p.qty }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(p.entry_price) }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(p.current_price) }}</td>
@@ -212,11 +221,15 @@
             <th class="py-3 px-4">Action / Notes</th>
           </tr>
         </thead>
-        <tbody class="divide-y divide-slate-700/40 font-mono">
+        <tbody id="live-signals-tbody" class="divide-y divide-slate-700/40 font-mono">
           {% for s in recent_signals %}
           <tr class="hover:bg-slate-700/20 transition">
-            <td class="py-3 px-4 text-slate-400">{{ s.received_at }}</td>
-            <td class="py-3 px-4 font-bold text-white">{{ s.symbol }}</td>
+            <td class="py-3 px-4 text-slate-400 whitespace-nowrap">{{ s.received_at }}</td>
+            <td class="py-3 px-4 font-bold text-white">
+              <button type="button" onclick="openSymbolChart('{{ s.symbol }}', '{{ s.received_at[:10] }}')" class="text-sky-400 hover:text-sky-300 underline decoration-sky-500/40 underline-offset-2 transition">
+                {{ s.symbol }}
+              </button>
+            </td>
             <td class="py-3 px-4">${{ "%.2f"|format(s.close_price) }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(s.or_low) }} - ${{ "%.2f"|format(s.or_high) }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(s.atr) }}</td>
@@ -257,4 +270,112 @@
   </div>
 
 </div>
+
+<script>
+  let _ptAutoRefreshEnabled = true;
+  let _ptRefreshTimer = null;
+
+  function toggleDashboardAutoRefresh() {
+    _ptAutoRefreshEnabled = !_ptAutoRefreshEnabled;
+    const btn = document.getElementById("auto-refresh-toggle");
+    const dot = document.getElementById("auto-refresh-dot");
+    const lbl = document.getElementById("auto-refresh-label");
+    if (_ptAutoRefreshEnabled) {
+      btn.className = "px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-semibold flex items-center gap-1.5 transition hover:bg-emerald-500/25";
+      dot.className = "w-2 h-2 rounded-full bg-emerald-400 animate-pulse";
+      lbl.textContent = "Live Auto-Refresh";
+      pollDashboardLive();
+    } else {
+      btn.className = "px-3 py-1.5 rounded-lg bg-slate-700/60 border border-slate-600 text-slate-300 text-xs font-semibold flex items-center gap-1.5 transition hover:bg-slate-700";
+      dot.className = "w-2 h-2 rounded-full bg-slate-400";
+      lbl.textContent = "Refresh Paused";
+      if (_ptRefreshTimer) clearTimeout(_ptRefreshTimer);
+    }
+  }
+
+  async function pollDashboardLive() {
+    if (!_ptAutoRefreshEnabled) return;
+    let nextDelayMs = 15000;
+    try {
+      const res = await fetch("/api/dashboard/live", { cache: "no-store" });
+      if (res.ok) {
+        const d = await res.json();
+        nextDelayMs = d.is_market_open ? 5000 : 30000;
+
+        // Header market badge & ET clock
+        const dot = document.getElementById("header-market-dot");
+        const mText = document.getElementById("header-market-text");
+        const clk = document.getElementById("header-clock-et");
+        if (dot) dot.className = `w-2 h-2 rounded-full ${d.is_market_open ? "bg-emerald-400 animate-pulse" : "bg-slate-500"}`;
+        if (mText) mText.textContent = d.is_market_open ? "MARKET OPEN" : "MARKET CLOSED";
+        if (clk) clk.textContent = `${d.current_time_et} ET`;
+
+        // KPI cards
+        const eqEl = document.getElementById("live-equity");
+        const stEl = document.getElementById("live-starting-equity");
+        const pnlEl = document.getElementById("live-daily-pnl");
+        const posCntEl = document.getElementById("live-positions-count");
+        const posHeadEl = document.getElementById("live-positions-heading");
+
+        if (eqEl) eqEl.textContent = `$${Number(d.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        if (stEl) stEl.textContent = `Starting Today: $${Number(d.starting_equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        if (pnlEl) {
+          const sign = d.daily_pnl >= 0 ? "+" : "";
+          pnlEl.textContent = `${sign}$${Number(d.daily_pnl).toFixed(2)} (${Number(d.daily_pnl_pct).toFixed(2)}%)`;
+          pnlEl.className = `text-2xl font-bold mt-1 font-mono ${d.daily_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`;
+        }
+        if (posCntEl) posCntEl.textContent = `${d.positions.length} / ${d.max_positions} Max`;
+        if (posHeadEl) posHeadEl.textContent = `Open Positions (${d.positions.length})`;
+
+        // Scanner badges
+        const sc = d.scanner_info || {};
+        const mh = sc.market_health || {};
+        const scPill = document.getElementById("scanner-status-pill");
+        const spyB = document.getElementById("scanner-spy-badge");
+        const qqqB = document.getElementById("scanner-qqq-badge");
+        const lastScan = document.getElementById("scanner-last-scan");
+        if (scPill && sc.status) scPill.textContent = sc.status;
+        if (spyB) {
+          spyB.textContent = mh.spy_healthy ? "SPY BULLISH" : "SPY BEARISH";
+          spyB.className = `px-1.5 py-0.5 rounded text-[10px] font-bold ${mh.spy_healthy ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-rose-500/20 text-rose-300 border border-rose-500/30"}`;
+        }
+        if (qqqB) {
+          qqqB.textContent = mh.qqq_healthy ? "QQQ BULLISH" : "QQQ BEARISH";
+          qqqB.className = `px-1.5 py-0.5 rounded text-[10px] font-bold ${mh.qqq_healthy ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-rose-500/20 text-rose-300 border border-rose-500/30"}`;
+        }
+        if (lastScan && sc.last_scan_time) lastScan.innerHTML = `&bull; Last Scan: ${sc.last_scan_time} ET`;
+
+        // Open Positions table
+        const posBody = document.getElementById("live-positions-tbody");
+        if (posBody) {
+          if (!d.positions.length) {
+            posBody.innerHTML = `<tr><td colspan="7" class="py-6 text-center text-slate-500 font-sans">No open positions. All cash.</td></tr>`;
+          } else {
+            posBody.innerHTML = d.positions.map(p => {
+              const up = p.unrealized_pnl >= 0;
+              return `<tr class="hover:bg-slate-700/20 transition">
+                <td class="py-3 px-4 font-bold text-white"><button type="button" onclick="openSymbolChart('${p.symbol}')" class="text-sky-400 hover:text-sky-300 underline decoration-sky-500/40 underline-offset-2 transition">${p.symbol}</button></td>
+                <td class="py-3 px-4">${p.qty}</td>
+                <td class="py-3 px-4">$${Number(p.entry_price).toFixed(2)}</td>
+                <td class="py-3 px-4">$${Number(p.current_price).toFixed(2)}</td>
+                <td class="py-3 px-4">$${Number(p.market_value).toFixed(2)}</td>
+                <td class="py-3 px-4 font-semibold ${up ? "text-emerald-400" : "text-rose-400"}">${up ? "+" : ""}$${Number(p.unrealized_pnl).toFixed(2)}</td>
+                <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-[10px] font-sans font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">ACTIVE</span></td>
+              </tr>`;
+            }).join("");
+          }
+        }
+      }
+    } catch (e) {
+      // Silent retry on transient network hiccup
+    } finally {
+      if (_ptAutoRefreshEnabled) {
+        _ptRefreshTimer = setTimeout(pollDashboardLive, nextDelayMs);
+      }
+    }
+  }
+
+  // Start background polling after initial page load
+  _ptRefreshTimer = setTimeout(pollDashboardLive, 5000);
+</script>
 {% endblock %}
