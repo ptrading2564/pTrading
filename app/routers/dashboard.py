@@ -1,12 +1,16 @@
 """Dashboard router: Web UI, Authentication, Mode Switcher, Kill-Switch, and ChartMill CSV Upload."""
 
 import csv
+import hashlib
+import hmac
 import io
 import json
 import secrets
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -27,6 +31,7 @@ from app.db import (
 )
 from app.services.analytics_service import analytics_service
 from app.services.chartmill_importer import chartmill_importer
+from app.services.lifecycle_worker import LifecycleWorker
 from app.services.market_scanner import get_market_scanner
 from app.services.risk_manager import RiskManager
 from app.services.strategy_reviewer import strategy_reviewer
@@ -35,7 +40,10 @@ from app.services.telegram_bot import telegram
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Dashboard"])
-security = HTTPBasic()
+security = HTTPBasic(auto_error=False)
+
+SESSION_COOKIE_NAME = "ptrading_session"
+SESSION_MAX_AGE_SECONDS = 7 * 24 * 3600  # 7 days
 
 templates_path = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(templates_path))
@@ -44,17 +52,127 @@ broker = AlpacaAdapter()
 risk_manager = RiskManager(broker)
 
 
-def authenticate_user(credentials: HTTPBasicCredentials = Depends(security)) -> str:
-    """Verifies HTTP Basic authentication credentials against configured settings."""
-    correct_username = secrets.compare_digest(credentials.username, settings.DASHBOARD_USERNAME)
-    correct_password = secrets.compare_digest(credentials.password, settings.DASHBOARD_PASSWORD)
-    if not (correct_username and correct_password):
+def _create_session_token(username: str) -> str:
+    """Creates an HMAC-SHA256 signed session token valid for 7 days."""
+    exp = int(time.time()) + SESSION_MAX_AGE_SECONDS
+    payload = f"{username}:{exp}"
+    sig = hmac.new(
+        settings.SESSION_SECRET_KEY.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{payload}:{sig}"
+
+
+def _verify_session_token(token: Optional[str]) -> Optional[str]:
+    """Verifies an HMAC-SHA256 signed session cookie token and returns the username if valid."""
+    if not token:
+        return None
+    parts = token.split(":")
+    if len(parts) != 3:
+        return None
+    username, exp_str, sig = parts
+    try:
+        if int(exp_str) < int(time.time()):
+            return None
+    except ValueError:
+        return None
+    expected_sig = hmac.new(
+        settings.SESSION_SECRET_KEY.encode("utf-8"),
+        f"{username}:{exp_str}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if secrets.compare_digest(sig, expected_sig) and secrets.compare_digest(username, settings.DASHBOARD_USERNAME):
+        return username
+    return None
+
+
+def authenticate_user(
+    request: Request,
+    credentials: Optional[HTTPBasicCredentials] = Depends(security),
+) -> str:
+    """Authenticates via signed session cookie (HTML login) OR HTTP Basic Auth (API/scripts)."""
+    # 1. Check signed session cookie first
+    cookie_user = _verify_session_token(request.cookies.get(SESSION_COOKIE_NAME))
+    if cookie_user:
+        return cookie_user
+
+    # 2. Check HTTP Basic Auth credentials
+    if credentials is not None:
+        correct_username = secrets.compare_digest(credentials.username, settings.DASHBOARD_USERNAME)
+        correct_password = secrets.compare_digest(credentials.password, settings.DASHBOARD_PASSWORD)
+        if correct_username and correct_password:
+            return credentials.username
+
+    # 3. Redirect interactive browser HTML requests to /login; return 401 for API requests
+    accept = request.headers.get("accept", "")
+    is_api = request.url.path.startswith("/api/")
+    if not is_api and "text/html" in accept:
+        next_path = request.url.path
+        if request.url.query:
+            next_path = f"{next_path}?{request.url.query}"
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Basic"},
+            status_code=status.HTTP_303_SEE_OTHER,
+            headers={"Location": f"/login?next={quote(next_path, safe='/?=&')}"},
         )
-    return credentials.username
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Incorrect username or password",
+        headers={"WWW-Authenticate": "Basic"},
+    )
+
+
+@router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, next: str = "/"):
+    """Renders the clean HTML sign-in page."""
+    if _verify_session_token(request.cookies.get(SESSION_COOKIE_NAME)):
+        return RedirectResponse(url=next if next.startswith("/") else "/", status_code=status.HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={"error": None, "next_url": next if next.startswith("/") else "/"},
+    )
+
+
+@router.post("/login", response_class=HTMLResponse)
+async def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    next: str = Form("/"),
+):
+    """Validates credentials and sets an HttpOnly signed session cookie."""
+    correct_username = secrets.compare_digest(username.strip(), settings.DASHBOARD_USERNAME)
+    correct_password = secrets.compare_digest(password, settings.DASHBOARD_PASSWORD)
+    safe_next = next if next.startswith("/") and not next.startswith("//") else "/"
+
+    if not (correct_username and correct_password):
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={"error": "Invalid username or password.", "next_url": safe_next},
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    response = RedirectResponse(url=safe_next, status_code=status.HTTP_303_SEE_OTHER)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=_create_session_token(username.strip()),
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=(request.url.scheme == "https"),
+    )
+    return response
+
+
+@router.get("/logout")
+async def logout():
+    """Clears the session cookie and redirects to /login."""
+    response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    response.delete_cookie(key=SESSION_COOKIE_NAME)
+    return response
 
 
 @router.get("/health")
@@ -303,9 +421,16 @@ async def generate_analytics_report_manual(
     date: Optional[str] = Form(None),
     username: str = Depends(authenticate_user),
 ):
-    """Manually refreshes and persists the daily analysis & strategy review for the given date."""
+    """Manually backfills missing broker fills, enriches MFE/MAE, and refreshes the daily report."""
     tz = ZoneInfo(settings.MARKET_TIMEZONE)
     target_date = date or datetime.now(tz).strftime("%Y-%m-%d")
+    try:
+        worker = LifecycleWorker(broker)
+        await worker.backfill_missing_trade_exits()
+        await worker.update_daily_stats_snapshot()
+    except Exception as e:
+        logger.warning("Manual trade fill backfill skipped: %s", e)
+
     try:
         await analytics_service.enrich_eod_excursions_and_regime(target_date)
     except Exception as e:

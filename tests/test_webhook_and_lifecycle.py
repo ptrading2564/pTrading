@@ -221,3 +221,34 @@ async def test_analytics_dashboard_and_exports():
         res_csv = await client.get("/api/analytics/export/csv", auth=auth)
         assert res_csv.status_code == 200
         assert "trade_date,symbol,qty" in res_csv.text
+
+
+@pytest.mark.asyncio
+async def test_html_login_and_session_cookie_flow():
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        # Unauthenticated browser request redirects to /login
+        res_redir = await client.get("/analytics", headers={"Accept": "text/html"}, follow_redirects=False)
+        assert res_redir.status_code == 303
+        assert res_redir.headers["location"].startswith("/login")
+
+        # GET /login renders login form
+        res_login_page = await client.get("/login")
+        assert res_login_page.status_code == 200
+        assert "Sign In" in res_login_page.text
+
+        # POST /login with valid credentials sets HttpOnly cookie and grants access
+        res_post = await client.post(
+            "/login",
+            data={
+                "username": settings.DASHBOARD_USERNAME,
+                "password": settings.DASHBOARD_PASSWORD,
+                "next": "/analytics",
+            },
+            follow_redirects=False,
+        )
+        assert res_post.status_code == 303
+        assert "ptrading_session" in res_post.cookies
+
+        res_authed = await client.get("/analytics", cookies=res_post.cookies)
+        assert res_authed.status_code == 200
+        assert "Daily Comprehensive Analysis" in res_authed.text

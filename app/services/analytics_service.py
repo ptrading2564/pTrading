@@ -714,25 +714,31 @@ class AnalyticsService:
         daily_pnl = round(d_end - d_start, 2)
         daily_roi_pct = round(((d_end - d_start) / d_start) * 100.0, 3) if d_start > 0 else 0.0
 
-        cumulative_pnl = round(current_equity - initial_equity, 2)
-        cumulative_roi_dec = (current_equity - initial_equity) / initial_equity if initial_equity > 0 else 0.0
-        cumulative_roi_pct = round(cumulative_roi_dec * 100.0, 3)
+        # Time-Weighted Return (TWR) chains daily returns so deposits/account resets never distort ROI
+        def _twr_roi(rows: List[Dict[str, Any]]) -> Tuple[float, float]:
+            if not rows:
+                return 0.0, 0.0
+            growth = 1.0
+            total_pnl = 0.0
+            for r in rows:
+                s_e = float(r["starting_equity"])
+                e_e = float(r["current_equity"])
+                total_pnl += (e_e - s_e)
+                if s_e > 0:
+                    growth *= (1.0 + ((e_e - s_e) / s_e))
+            return round((growth - 1.0) * 100.0, 3), round(total_pnl, 2)
 
-        # WTD, MTD, Rolling 30D
+        cumulative_roi_pct, cumulative_pnl = _twr_roi(scoped)
+        cumulative_roi_dec = cumulative_roi_pct / 100.0
+
+        # WTD, MTD, Rolling 30D (Time-Weighted)
         target_dt = datetime.strptime(target_row["date"], "%Y-%m-%d").date()
         week_start = (target_dt - timedelta(days=target_dt.weekday())).strftime("%Y-%m-%d")
         month_start = target_dt.replace(day=1).strftime("%Y-%m-%d")
 
-        def _period_roi(rows: List[Dict[str, Any]]) -> float:
-            if not rows:
-                return 0.0
-            s_eq = float(rows[0]["starting_equity"])
-            e_eq = float(rows[-1]["current_equity"])
-            return round(((e_eq - s_eq) / s_eq) * 100.0, 3) if s_eq > 0 else 0.0
-
-        wtd_roi = _period_roi([r for r in scoped if r["date"] >= week_start])
-        mtd_roi = _period_roi([r for r in scoped if r["date"] >= month_start])
-        rolling_30d_roi = _period_roi(scoped[-30:])
+        wtd_roi, _ = _twr_roi([r for r in scoped if r["date"] >= week_start])
+        mtd_roi, _ = _twr_roi([r for r in scoped if r["date"] >= month_start])
+        rolling_30d_roi, _ = _twr_roi(scoped[-30:])
 
         trading_days = len(scoped)
         if trading_days > 0 and cumulative_roi_dec > -1.0:

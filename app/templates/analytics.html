@@ -215,7 +215,7 @@
       <div class="text-xs space-y-1.5 text-slate-300 font-mono">
         <div class="flex justify-between"><span class="text-slate-400 font-sans">Full / Half Kelly:</span><span>{{ "%.2f"|format(ror_a.kelly_pct) }}% / {{ "%.2f"|format(ror_a.half_kelly_pct) }}%</span></div>
         <div class="flex justify-between"><span class="text-slate-400 font-sans">Active Risk / Trade:</span><span>{{ "%.2f"|format(ror_a.current_risk_pct) }}% ({{ ror_a.sizing_status }})</span></div>
-        <div class="flex justify-between"><span class="text-slate-400 font-sans">MC Median / P95 Max DD:</span><span>-{{ ror_mc.median_max_dd_pct if ror_mc.median_max_dd_pct is not none else 'N/A' }}% / -{{ ror_mc.p95_max_dd_pct if ror_mc.p95_max_dd_pct is not none else 'N/A' }}%</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">MC Median / P95 Max DD:</span><span>{% if ror_mc.median_max_dd_pct is not none %}-{{ ror_mc.median_max_dd_pct }}%{% else %}N/A{% endif %} / {% if ror_mc.p95_max_dd_pct is not none %}-{{ ror_mc.p95_max_dd_pct }}%{% else %}N/A{% endif %}</span></div>
         <div class="flex justify-between"><span class="text-slate-400 font-sans">Expected Max Loss Streak:</span><span>{{ ror_mc.expected_max_losing_streak if ror_mc.expected_max_losing_streak is not none else 'N/A' }} trades</span></div>
       </div>
     </div>
@@ -311,7 +311,7 @@
           {% for d in daily_records %}
           {% set d_roi = ((d.current_equity - d.starting_equity) / d.starting_equity * 100.0) if d.starting_equity > 0 else 0.0 %}
           <tr class="hover:bg-slate-700/20 transition">
-            <td class="py-3 px-4 font-bold text-white"><a href="/analytics?date={{ d.date }}" class="hover:text-sky-400">{{ d.date }}</a></td>
+            <td class="py-3 px-4 font-bold text-white whitespace-nowrap"><a href="/analytics?date={{ d.date }}" class="hover:text-sky-400">{{ d.date }}</a></td>
             <td class="py-3 px-4">${{ "{:,.2f}".format(d.starting_equity) }}</td>
             <td class="py-3 px-4">${{ "{:,.2f}".format(d.current_equity) }}</td>
             <td class="py-3 px-4 font-bold {% if d_roi >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
@@ -363,7 +363,7 @@
         <tbody class="divide-y divide-slate-700/40 font-mono">
           {% for t in closed_trades %}
           <tr class="hover:bg-slate-700/20 transition">
-            <td class="py-3 px-4 text-slate-400">{{ t.trade_date or (t.entry_time or '')[:10] }}</td>
+            <td class="py-3 px-4 text-slate-400 whitespace-nowrap">{{ t.trade_date or (t.entry_time or '')[:10] }}</td>
             <td class="py-3 px-4 font-bold text-white">{{ t.symbol }}</td>
             <td class="py-3 px-4">{{ t.qty }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(t.entry_price) }}</td>
@@ -377,9 +377,9 @@
                 {{ t.exit_reason or 'UNKNOWN' }}
               </span>
             </td>
-            <td class="py-3 px-4 text-slate-300">
-              {% if t.mfe_r is not none %}+{{ "%.1f"|format(t.mfe_r) }}R{% else %}—{% endif %} /
-              {% if t.mae_r is not none %}-{{ "%.1f"|format(t.mae_r) }}R{% else %}—{% endif %}
+            <td class="py-3 px-4 text-slate-300 whitespace-nowrap">
+              {% if t.mfe_r is not none %}{{ "%+.1f"|format(t.mfe_r) }}R{% else %}—{% endif %} /
+              {% if t.mae_r is not none %}-{{ "%.1f"|format(t.mae_r|abs) }}R{% else %}—{% endif %}
             </td>
             <td class="py-3 px-4 font-bold {% if (t.pnl_dollars or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
               {% if (t.pnl_dollars or 0) >= 0 %}+{% endif %}${{ "%.2f"|format(t.pnl_dollars or 0.0) }}

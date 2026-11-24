@@ -399,11 +399,62 @@ class LifecycleWorker:
 
         await self.update_daily_stats_snapshot()
 
+    async def backfill_missing_trade_exits(self, lookback_days: int = 14) -> int:
+        """Backfills exit_price, pnl_dollars, and pnl_r for already-closed trades missing broker fill reconciliation."""
+        async with get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM trades WHERE is_open = 0 AND (exit_price IS NULL OR pnl_dollars IS NULL);"
+            )
+            missing_trades = [dict(r) for r in await cursor.fetchall()]
+
+        if not missing_trades:
+            return 0
+
+        closed_orders = await self.broker.get_closed_orders(
+            after=datetime.now(timezone.utc) - timedelta(days=lookback_days)
+        )
+        updated = 0
+        async with get_connection() as conn:
+            for trade in missing_trades:
+                await self._finalize_closed_trade(
+                    conn=conn,
+                    trade=trade,
+                    closed_orders=closed_orders,
+                    default_reason=str(trade.get("exit_reason") or "BRACKET_EXIT"),
+                )
+                updated += 1
+            await conn.commit()
+
+        # Re-sync daily_stats.realized_pnl and trade_count for all affected dates
+        async with get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE daily_stats
+                SET realized_pnl = COALESCE((
+                        SELECT ROUND(SUM(pnl_dollars), 2)
+                        FROM trades
+                        WHERE is_open = 0
+                          AND COALESCE(trade_date, substr(entry_time, 1, 10)) = daily_stats.date
+                    ), realized_pnl),
+                    trade_count = COALESCE((
+                        SELECT COUNT(*)
+                        FROM trades
+                        WHERE is_open = 0
+                          AND COALESCE(trade_date, substr(entry_time, 1, 10)) = daily_stats.date
+                    ), trade_count);
+                """
+            )
+            await conn.commit()
+
+        logger.info("Backfilled exit fills and P&L for %d historical closed trade(s).", updated)
+        return updated
+
     async def generate_and_persist_daily_report(
         self, report_date: Optional[str] = None, enrich_bars: bool = True
     ) -> dict:
-        """Runs full EOD enrichment, analytics, and strategy review and persists to daily_reports."""
+        """Runs full EOD backfill, enrichment, analytics, and strategy review and persists to daily_reports."""
         target_date = report_date or datetime.now(self.tz).strftime("%Y-%m-%d")
+        await self.backfill_missing_trade_exits()
         await self.update_daily_stats_snapshot()
         if enrich_bars:
             await analytics_service.enrich_eod_excursions_and_regime(target_date)
