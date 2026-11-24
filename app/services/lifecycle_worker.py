@@ -162,6 +162,14 @@ class LifecycleWorker:
         flatten_time = market_close - timedelta(minutes=5)
 
         if now_et >= flatten_time:
+            try:
+                if not await self.broker.is_market_open():
+                    logger.debug("Skipping EOD flatten check: regular market session is already closed.")
+                    return
+            except Exception as e:
+                logger.warning("Could not confirm market open status before EOD flatten: %s", e)
+                return
+
             logger.warning(
                 "EOD Flatten Triggered! Current ET: %s >= Cutoff: %s",
                 now_et.strftime("%H:%M:%S"),
@@ -173,8 +181,23 @@ class LifecycleWorker:
             pos_prices = {p.symbol: float(p.current_price) for p in positions}
 
             await self.broker.close_all_positions()
+            await asyncio.sleep(2.0)
 
-            # Reconcile and close all open trades in DB with EOD_FLATTEN exit prices & P&L
+            # Verify Alpaca actually flattened all positions; retry once if bracket legs delayed release
+            remaining = await self.broker.get_positions()
+            if remaining:
+                logger.warning(
+                    "EOD Flatten retry: %d position(s) still open (%s). Retrying close_all_positions...",
+                    len(remaining),
+                    ", ".join(p.symbol for p in remaining),
+                )
+                await self.broker.close_all_positions()
+                await asyncio.sleep(2.0)
+                remaining = await self.broker.get_positions()
+
+            remaining_symbols = {p.symbol for p in remaining}
+
+            # Reconcile and close ONLY DB trades whose symbols are confirmed flat at Alpaca
             closed_orders = await self.broker.get_closed_orders(
                 after=datetime.now(timezone.utc) - timedelta(hours=12)
             )
@@ -182,6 +205,8 @@ class LifecycleWorker:
                 cursor = await conn.execute("SELECT * FROM trades WHERE is_open = 1;")
                 open_trades = [dict(r) for r in await cursor.fetchall()]
                 for trade in open_trades:
+                    if trade["symbol"] in remaining_symbols:
+                        continue
                     await self._finalize_closed_trade(
                         conn=conn,
                         trade=trade,
@@ -192,8 +217,15 @@ class LifecycleWorker:
                 await conn.commit()
 
             await self.update_daily_stats_snapshot()
-            await set_system_state("eod_flatten_done", today_str)
-            await telegram.notify_eod_flatten(pos_count)
+            if not remaining:
+                await set_system_state("eod_flatten_done", today_str)
+                await telegram.notify_eod_flatten(pos_count)
+            else:
+                rem_list = ", ".join(sorted(remaining_symbols))
+                logger.error("EOD Flatten incomplete! Still open at broker: %s", rem_list)
+                await telegram.send_message(
+                    f"⚠️ <b>EOD Flatten Warning:</b> {len(remaining)} position(s) still open at Alpaca: <code>{rem_list}</code>. Will retry."
+                )
 
     async def _finalize_closed_trade(
         self,
@@ -287,7 +319,12 @@ class LifecycleWorker:
             pnl_dollars = round((exit_price - entry_price) * qty, 2)
             pnl_r = round(pnl_dollars / initial_risk_dollars, 4) if initial_risk_dollars > 0 else 0.0
 
-        trade_date = trade.get("trade_date") or datetime.now(self.tz).strftime("%Y-%m-%d")
+        entry_date_fallback = str(trade.get("entry_time") or "")[:10]
+        trade_date = (
+            trade.get("trade_date")
+            or (entry_date_fallback if len(entry_date_fallback) == 10 else None)
+            or datetime.now(self.tz).strftime("%Y-%m-%d")
+        )
 
         await conn.execute(
             """
@@ -400,7 +437,13 @@ class LifecycleWorker:
         await self.update_daily_stats_snapshot()
 
     async def backfill_missing_trade_exits(self, lookback_days: int = 14) -> int:
-        """Backfills exit_price, pnl_dollars, and pnl_r for already-closed trades missing broker fill reconciliation."""
+        """Re-opens trades still active at Alpaca and backfills missing exit fills for actually-closed trades."""
+        try:
+            live_positions = await self.broker.get_positions()
+            active_symbols = {p.symbol for p in live_positions}
+        except Exception:
+            active_symbols = set()
+
         async with get_connection() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM trades WHERE is_open = 0 AND (exit_price IS NULL OR pnl_dollars IS NULL);"
@@ -414,8 +457,23 @@ class LifecycleWorker:
             after=datetime.now(timezone.utc) - timedelta(days=lookback_days)
         )
         updated = 0
+        reopened = 0
         async with get_connection() as conn:
             for trade in missing_trades:
+                # If broker still holds an active position for this symbol, re-open in DB instead of faking a $0 exit
+                if trade["symbol"] in active_symbols:
+                    await conn.execute(
+                        """
+                        UPDATE trades
+                        SET is_open = 1, exit_reason = NULL, exit_time = NULL,
+                            exit_price = NULL, pnl_dollars = NULL, pnl_r = NULL
+                        WHERE id = ?;
+                        """,
+                        (trade["id"],),
+                    )
+                    reopened += 1
+                    continue
+
                 await self._finalize_closed_trade(
                     conn=conn,
                     trade=trade,
@@ -425,7 +483,7 @@ class LifecycleWorker:
                 updated += 1
             await conn.commit()
 
-        # Re-sync daily_stats.realized_pnl and trade_count for all affected dates
+        # Re-sync daily_stats.realized_pnl and trade_count using only reconciled closed trades
         async with get_connection() as conn:
             await conn.execute(
                 """
@@ -433,20 +491,24 @@ class LifecycleWorker:
                 SET realized_pnl = COALESCE((
                         SELECT ROUND(SUM(pnl_dollars), 2)
                         FROM trades
-                        WHERE is_open = 0
+                        WHERE is_open = 0 AND exit_price IS NOT NULL AND pnl_dollars IS NOT NULL
                           AND COALESCE(trade_date, substr(entry_time, 1, 10)) = daily_stats.date
-                    ), realized_pnl),
+                    ), 0.0),
                     trade_count = COALESCE((
                         SELECT COUNT(*)
                         FROM trades
-                        WHERE is_open = 0
+                        WHERE is_open = 0 AND exit_price IS NOT NULL AND pnl_dollars IS NOT NULL
                           AND COALESCE(trade_date, substr(entry_time, 1, 10)) = daily_stats.date
-                    ), trade_count);
+                    ), 0);
                 """
             )
             await conn.commit()
 
-        logger.info("Backfilled exit fills and P&L for %d historical closed trade(s).", updated)
+        logger.info(
+            "Backfill complete: reconciled %d closed trade(s), re-opened %d still-active position(s).",
+            updated,
+            reopened,
+        )
         return updated
 
     async def generate_and_persist_daily_report(

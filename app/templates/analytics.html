@@ -432,8 +432,8 @@
       data: {
         labels: curve.length ? curve.map(c => c.date) : ["Start"],
         datasets: [{
-          label: "Account Equity ($)",
-          data: curve.length ? curve.map(c => c.equity) : [REPORT.projections.base_equity],
+          label: "Time-Weighted Equity ($)",
+          data: curve.length ? curve.map(c => c.twr_equity ?? c.equity) : [REPORT.projections.base_equity],
           borderColor: "#38bdf8",
           backgroundColor: "rgba(56, 189, 248, 0.12)",
           fill: true,

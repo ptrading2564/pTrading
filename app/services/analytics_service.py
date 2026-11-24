@@ -747,8 +747,11 @@ class AnalyticsService:
         else:
             cagr_val = None
 
-        # Equity curve, drawdowns, daily returns
-        peak = initial_equity
+        # Equity curve (using Time-Weighted Indexed Equity anchored to current account scale so resets don't spike),
+        # drawdowns, and daily returns
+        twr_base = current_equity / (1.0 + cumulative_roi_dec) if (1.0 + cumulative_roi_dec) > 0 else current_equity
+        twr_growth = 1.0
+        peak = twr_base
         max_dd_d = 0.0
         max_dd_pct = 0.0
         daily_returns: List[float] = []
@@ -760,9 +763,12 @@ class AnalyticsService:
             ret = (c_e - s_e) / s_e if s_e > 0 else 0.0
             daily_returns.append(ret)
 
-            if c_e > peak:
-                peak = c_e
-            dd_d = max(0.0, peak - c_e)
+            twr_growth *= (1.0 + ret)
+            twr_eq = twr_base * twr_growth
+
+            if twr_eq > peak:
+                peak = twr_eq
+            dd_d = max(0.0, peak - twr_eq)
             dd_pct = (dd_d / peak) * 100.0 if peak > 0 else 0.0
             if dd_d > max_dd_d:
                 max_dd_d = dd_d
@@ -773,13 +779,14 @@ class AnalyticsService:
                 {
                     "date": r["date"],
                     "equity": round(c_e, 2),
+                    "twr_equity": round(twr_eq, 2),
                     "daily_pnl": round(c_e - s_e, 2),
                     "daily_roi_pct": round(ret * 100.0, 3),
                     "drawdown_pct": round(-dd_pct, 3),
                 }
             )
 
-        current_dd_pct = round(((peak - current_equity) / peak) * 100.0, 2) if peak > 0 else 0.0
+        current_dd_pct = round(((peak - (twr_base * twr_growth)) / peak) * 100.0, 2) if peak > 0 else 0.0
         recovery_factor = round(cumulative_pnl / max_dd_d, 2) if max_dd_d > 0 else 0.0
 
         sharpe: Optional[float] = None
@@ -987,7 +994,11 @@ class AnalyticsService:
                 dict(r)
                 for r in await (
                     await conn.execute(
-                        "SELECT * FROM trades WHERE is_open = 0 ORDER BY COALESCE(exit_time, entry_time) ASC;"
+                        """
+                        SELECT * FROM trades
+                        WHERE is_open = 0 AND exit_price IS NOT NULL AND pnl_dollars IS NOT NULL
+                        ORDER BY COALESCE(exit_time, entry_time) ASC;
+                        """
                     )
                 ).fetchall()
             ]

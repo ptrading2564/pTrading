@@ -7,7 +7,7 @@ import io
 import json
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import quote
@@ -218,7 +218,7 @@ async def dashboard_home(
         positions = await broker.get_positions()
         is_market_open = await broker.is_market_open()
         market_close = await broker.get_market_close_time()
-        flatten_time_et = (market_close).strftime("%H:%M")
+        flatten_time_et = (market_close - timedelta(minutes=5)).strftime("%H:%M")
     except Exception as e:
         logger.error("Error fetching broker data for dashboard: %s", e)
         equity = 50000.0
@@ -233,6 +233,14 @@ async def dashboard_home(
     mode = await get_system_state("execution_mode", default=settings.EXECUTION_MODE.value)
     kill_switch = await get_system_state("kill_switch", default="OFF")
     recent_signals = await get_recent_signals(limit=25)
+    for sig in recent_signals:
+        raw_ts = sig.get("received_at")
+        if raw_ts:
+            try:
+                dt_utc = datetime.strptime(str(raw_ts)[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=ZoneInfo("UTC"))
+                sig["received_at"] = dt_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S ET")
+            except Exception:
+                pass
 
     saved_basket = await get_system_state("latest_chartmill_basket")
     active_basket_str = basket_str or saved_basket or ""
@@ -324,7 +332,11 @@ async def analytics_page(
         daily_records = [dict(r) for r in await cursor_daily.fetchall()]
 
         cursor_trades = await conn.execute(
-            "SELECT * FROM trades WHERE is_open = 0 ORDER BY COALESCE(exit_time, entry_time) DESC LIMIT 100;"
+            """
+            SELECT * FROM trades
+            WHERE is_open = 0 AND exit_price IS NOT NULL AND pnl_dollars IS NOT NULL
+            ORDER BY COALESCE(exit_time, entry_time) DESC LIMIT 100;
+            """
         )
         closed_trades = [dict(r) for r in await cursor_trades.fetchall()]
 
