@@ -108,9 +108,9 @@ class ChartMillImporter:
         self,
         csv_content: str,
         reference_date: Optional[date] = None,
-        max_basket_size: int = 38,
+        max_basket_size: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Parses CSV text, filters candidates, ranks setups, and returns the top 38 basket."""
+        """Parses CSV text, filters candidates, ranks setups, and returns the qualified universe (Option B)."""
         reader = csv.DictReader(io.StringIO(csv_content))
         if not reader.fieldnames:
             return {"candidates": [], "basket": [], "basket_string": "", "total_imported": 0}
@@ -181,8 +181,8 @@ class ChartMillImporter:
         # Sort valid candidates descending by composite score
         candidates.sort(key=lambda c: c.composite_score, reverse=True)
 
-        # Top 38 basket
-        basket = candidates[:max_basket_size]
+        # Dynamic Basket (Option B): all qualified candidates without artificial ceiling
+        basket = candidates[:max_basket_size] if (max_basket_size is not None and max_basket_size > 0) else candidates
         basket_symbols = [c.symbol for c in basket]
         basket_string = ", ".join(basket_symbols)
 

@@ -87,3 +87,21 @@ def test_csv_parser_and_top_38_basket(importer: ChartMillImporter):
     assert "RISK2" not in result["basket_symbols"]
     assert isinstance(result["basket_string"], str)
     assert result["basket_symbols"][0] == "NVDA"  # Highest composite score should be first
+
+
+def test_csv_parser_dynamic_option_b(importer: ChartMillImporter):
+    """Verifies that Option B returns all qualified stocks without arbitrary capping."""
+    today = date(2026, 11, 23)
+    csv_rows = [
+        "Ticker,Company Name,Price,ATR %,Setup Rating,Technical Rating,Relative Strength,Next Earnings Date",
+        "AAPL,Apple Inc,150.00,2.8%,8,8,80,2026-12-15",
+        "NVDA,NVIDIA Corp,140.00,4.2%,9,9,95,2026-12-20",
+    ]
+    for i in range(1, 55):
+        csv_rows.append(f"SYM{i},Dummy Stock {i},{15 + i},3.0%,7,7,75,2026-12-30")
+
+    csv_data = "\n".join(csv_rows)
+    result = importer.parse_csv(csv_data, reference_date=today)
+    assert result["basket_size"] == 56
+    assert len(result["basket_symbols"]) == 56
+

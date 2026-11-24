@@ -59,7 +59,7 @@
           </span>
         </div>
         <p class="text-xs text-slate-300 mt-1">
-          Active Universe: <strong class="text-white">{{ basket_count or 38 }} momentum stocks</strong> &bull; SPY Market Gate:
+          Active Universe: <strong class="text-white">{{ basket_count or "All Qualified" }} momentum stocks</strong> &bull; SPY Market Gate:
           <span class="px-1.5 py-0.5 rounded text-[10px] font-bold {% if scanner_info.market_health.spy_healthy %}bg-emerald-500/20 text-emerald-300 border border-emerald-500/30{% else %}bg-rose-500/20 text-rose-300 border border-rose-500/30{% endif %}">
             SPY {{ "BULLISH" if scanner_info.market_health.spy_healthy else "BEARISH" }}
           </span>
@@ -182,7 +182,7 @@
       <div class="flex items-center justify-between">
         <span class="text-xs font-bold text-emerald-400 uppercase tracking-wide flex items-center gap-2">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-          Top {{ basket_count }} Basket Active & Synced in Server Scanner
+          {{ basket_count }} Qualified Stocks Active in Server Scanner (Option B - Dynamic)
         </span>
         <button onclick="navigator.clipboard.writeText('{{ basket_string }}'); alert('Copied basket to clipboard!');" class="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-semibold rounded transition">
           Copy Basket String
