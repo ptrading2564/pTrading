@@ -1,22 +1,35 @@
 """Dashboard router: Web UI, Authentication, Mode Switcher, Kill-Switch, and ChartMill CSV Upload."""
 
+import csv
+import io
+import json
 import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 import logging
 
 from app.brokers.alpaca_adapter import AlpacaAdapter
 from app.config import ExecutionMode, settings
-from app.db import get_connection, get_recent_signals, get_system_state, set_system_state
+from app.db import (
+    get_connection,
+    get_daily_report,
+    get_recent_signals,
+    get_system_state,
+    list_daily_report_dates,
+    save_daily_report,
+    set_system_state,
+)
+from app.services.analytics_service import analytics_service
 from app.services.chartmill_importer import chartmill_importer
 from app.services.market_scanner import get_market_scanner
 from app.services.risk_manager import RiskManager
+from app.services.strategy_reviewer import strategy_reviewer
 from app.services.telegram_bot import telegram
 
 logger = logging.getLogger(__name__)
@@ -139,29 +152,167 @@ async def dashboard_home(
     )
 
 
+async def _load_or_build_report(report_date: Optional[str] = None, force_refresh: bool = False) -> dict:
+    """Loads a stored daily report or generates it on demand."""
+    tz = ZoneInfo(settings.MARKET_TIMEZONE)
+    target_date = report_date or datetime.now(tz).strftime("%Y-%m-%d")
+
+    if not force_refresh:
+        stored = await get_daily_report(target_date)
+        if stored and stored.get("metrics"):
+            metrics = stored["metrics"]
+            diagnostics = metrics.get("diagnostics") or strategy_reviewer.run_diagnostics(metrics)
+            return {
+                "report": metrics,
+                "review_markdown": stored["review_markdown"],
+                "review_source": stored.get("review_source", "deterministic"),
+                "diagnostics": diagnostics,
+                "generated_at": stored.get("generated_at"),
+            }
+
+    report = await analytics_service.build_comprehensive_report(report_date=target_date)
+    review_md, review_source, diagnostics = await strategy_reviewer.generate_review(report)
+    report["diagnostics"] = diagnostics
+
+    if force_refresh:
+        await save_daily_report(
+            report_date=target_date,
+            metrics=report,
+            review_markdown=review_md,
+            review_source=review_source,
+        )
+
+    return {
+        "report": report,
+        "review_markdown": review_md,
+        "review_source": review_source,
+        "diagnostics": diagnostics,
+        "generated_at": report.get("generated_at"),
+    }
+
+
 @router.get("/analytics", response_class=HTMLResponse)
-async def analytics_page(request: Request, username: str = Depends(authenticate_user)):
-    """Historical analytics, daily equity logs, and trade outcomes."""
+async def analytics_page(
+    request: Request,
+    date: Optional[str] = None,
+    username: str = Depends(authenticate_user),
+):
+    """Comprehensive daily & cumulative analytics, Risk of Ruin, projections, and written strategy review."""
+    tz = ZoneInfo(settings.MARKET_TIMEZONE)
+    now_et = datetime.now(tz)
+
     async with get_connection() as conn:
-        cursor_daily = await conn.execute("SELECT * FROM daily_stats ORDER BY date DESC LIMIT 30;")
+        cursor_daily = await conn.execute("SELECT * FROM daily_stats ORDER BY date DESC LIMIT 60;")
         daily_records = [dict(r) for r in await cursor_daily.fetchall()]
 
         cursor_trades = await conn.execute(
-            "SELECT * FROM trades WHERE is_open = 0 ORDER BY exit_time DESC LIMIT 50;"
+            "SELECT * FROM trades WHERE is_open = 0 ORDER BY COALESCE(exit_time, entry_time) DESC LIMIT 100;"
         )
         closed_trades = [dict(r) for r in await cursor_trades.fetchall()]
+
+    stored_dates = await list_daily_report_dates(limit=60)
+    daily_dates = [d["date"] for d in daily_records]
+    available_dates = sorted(set(stored_dates + daily_dates + [now_et.strftime("%Y-%m-%d")]), reverse=True)
+    selected_date = date or (daily_dates[0] if daily_dates else now_et.strftime("%Y-%m-%d"))
+
+    bundle = await _load_or_build_report(report_date=selected_date, force_refresh=False)
 
     return templates.TemplateResponse(
         request=request,
         name="analytics.html",
         context={
             "username": username,
+            "selected_date": selected_date,
+            "available_dates": available_dates,
+            "report": bundle["report"],
+            "report_json": json.dumps(bundle["report"]),
+            "review_markdown": bundle["review_markdown"],
+            "review_source": bundle["review_source"],
+            "diagnostics": bundle["diagnostics"],
             "daily_records": daily_records,
             "closed_trades": closed_trades,
             "is_market_open": False,
-            "current_time_et": datetime.now(ZoneInfo(settings.MARKET_TIMEZONE)).strftime("%H:%M:%S"),
+            "current_time_et": now_et.strftime("%H:%M:%S"),
         },
     )
+
+
+@router.get("/api/analytics/report")
+async def get_analytics_report_json(
+    date: Optional[str] = None,
+    username: str = Depends(authenticate_user),
+):
+    """Returns the full comprehensive daily & cumulative analytics report as JSON."""
+    bundle = await _load_or_build_report(report_date=date, force_refresh=False)
+    return JSONResponse(
+        content={
+            "report": bundle["report"],
+            "diagnostics": bundle["diagnostics"],
+            "review_source": bundle["review_source"],
+            "review_markdown": bundle["review_markdown"],
+        }
+    )
+
+
+@router.get("/api/analytics/review.md")
+async def download_strategy_review_markdown(
+    date: Optional[str] = None,
+    username: str = Depends(authenticate_user),
+):
+    """Downloads the written Daily Strategy Review as a Markdown file."""
+    bundle = await _load_or_build_report(report_date=date, force_refresh=False)
+    d_str = bundle["report"]["report_date"]
+    return PlainTextResponse(
+        content=bundle["review_markdown"],
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="ptrading_review_{d_str}.md"'},
+    )
+
+
+@router.get("/api/analytics/export/csv")
+async def export_trades_csv(username: str = Depends(authenticate_user)):
+    """Exports all closed trades with full risk, slippage, MFE/MAE, and P&L metrics as CSV."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            "SELECT * FROM trades WHERE is_open = 0 ORDER BY COALESCE(exit_time, entry_time) DESC;"
+        )
+        trades = [dict(r) for r in await cursor.fetchall()]
+
+    buf = io.StringIO()
+    fields = [
+        "trade_date", "symbol", "qty", "entry_price", "exit_price",
+        "initial_stop_price", "take_profit_price", "initial_risk_dollars",
+        "pnl_dollars", "pnl_r", "exit_reason", "breakeven_stepped",
+        "stop_type", "signal_rvol", "signal_atr_ext", "slippage_dollars",
+        "slippage_r", "mfe_r", "mae_r", "post_exit_max_r", "entry_time", "exit_time",
+    ]
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for t in trades:
+        writer.writerow(t)
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="ptrading_trades_export.csv"'},
+    )
+
+
+@router.post("/api/analytics/generate")
+async def generate_analytics_report_manual(
+    date: Optional[str] = Form(None),
+    username: str = Depends(authenticate_user),
+):
+    """Manually refreshes and persists the daily analysis & strategy review for the given date."""
+    tz = ZoneInfo(settings.MARKET_TIMEZONE)
+    target_date = date or datetime.now(tz).strftime("%Y-%m-%d")
+    try:
+        await analytics_service.enrich_eod_excursions_and_regime(target_date)
+    except Exception as e:
+        logger.debug("Manual enrichment skipped: %s", e)
+
+    await _load_or_build_report(report_date=target_date, force_refresh=True)
+    return RedirectResponse(url=f"/analytics?date={target_date}", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/api/system/mode")

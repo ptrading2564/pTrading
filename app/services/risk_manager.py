@@ -24,6 +24,7 @@ class RiskEvaluation:
     take_profit_price: float
     risk_dollars: float
     stop_distance: float
+    stop_type: str = "ATR_1_5"
 
 
 class RiskManager:
@@ -180,6 +181,7 @@ class RiskManager:
         # Stop-Loss: max(OR_Low, Entry - 1.5 * ATR)
         atr_stop = round(close_price - 1.5 * atr, 2)
         stop_loss_price = round(max(or_low, atr_stop), 2)
+        stop_type = "OR_LOW" if or_low >= atr_stop else "ATR_1_5"
 
         # Prevent stop above entry or too tight
         stop_distance = round(entry_limit_price - stop_loss_price, 2)
@@ -228,4 +230,5 @@ class RiskManager:
             take_profit_price=take_profit_price,
             risk_dollars=risk_dollars,
             stop_distance=stop_distance,
+            stop_type=stop_type,
         )

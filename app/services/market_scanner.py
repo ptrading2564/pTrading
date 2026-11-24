@@ -397,6 +397,8 @@ class MarketScanner:
             elif mode_str == "AUTO":
                 from app.routers.webhook import execute_order_for_signal
                 try:
+                    atr_ext = round((c - or_h) / atr, 4) if atr > 0 else 0.0
+                    or_width_pct = round(((or_h - or_l) / c) * 100.0, 4) if c > 0 else 0.0
                     order_res = await execute_order_for_signal(
                         symbol=symbol,
                         qty=eval_res.qty,
@@ -404,6 +406,11 @@ class MarketScanner:
                         stop_loss_price=eval_res.stop_loss_price,
                         take_profit_price=eval_res.take_profit_price,
                         bar_time=bar_time,
+                        signal_price=c,
+                        stop_type=eval_res.stop_type,
+                        signal_rvol=round(rvol, 3),
+                        signal_atr_ext=atr_ext,
+                        or_width_pct=or_width_pct,
                     )
                     async with get_connection() as conn:
                         await conn.execute("UPDATE signals SET status = 'EXECUTED' WHERE id = ?;", (sig_id,))

@@ -30,6 +30,7 @@ class OrderInfo:
     created_at: datetime
     filled_at: Optional[datetime]
     legs: Optional[List["OrderInfo"]] = None
+    filled_avg_price: Optional[float] = None
 
 
 class BrokerAdapter(ABC):
@@ -87,3 +88,11 @@ class BrokerAdapter(ABC):
     async def get_market_close_time(self) -> datetime:
         """Returns the market close time for today in Eastern Time (handles early closes)."""
         pass
+
+    async def get_order_by_client_id(self, client_order_id: str) -> Optional[OrderInfo]:
+        """Fetches a single order (with nested legs) by client_order_id for fill reconciliation."""
+        return None
+
+    async def get_closed_orders(self, after: Optional[datetime] = None) -> List[OrderInfo]:
+        """Fetches closed/filled orders (with nested legs) for exit price reconciliation."""
+        return []

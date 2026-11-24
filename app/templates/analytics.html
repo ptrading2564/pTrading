@@ -1,16 +1,297 @@
 {% extends "base.html" %}
 
 {% block content %}
+{% set roi = report.roi_equity %}
+{% set daily = report.daily_trades_metrics %}
+{% set cum = report.cumulative_trades_metrics %}
+{% set ror = report.risk_of_ruin %}
+{% set ror_a = ror.analytical %}
+{% set ror_mc = ror.monte_carlo %}
+{% set proj = report.projections %}
+{% set funnel = report.signal_funnel %}
+
 <div class="space-y-6">
-  <div class="border-b border-slate-700/60 pb-3">
-    <h1 class="text-xl font-bold text-white">Performance Analytics & History</h1>
-    <p class="text-xs text-slate-400 mt-0.5">Historical daily P&L, completed trades, and risk metrics.</p>
+  <!-- Header & Controls -->
+  <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-700/60 pb-4">
+    <div>
+      <div class="flex items-center gap-2.5">
+        <h1 class="text-xl font-bold text-white">Daily Comprehensive Analysis & Strategy Review</h1>
+        <span class="text-[11px] px-2 py-0.5 rounded-full font-medium border
+          {% if proj.confidence == 'MEANINGFUL' %}bg-emerald-500/10 text-emerald-400 border-emerald-500/30
+          {% elif proj.confidence == 'LOW' %}bg-amber-500/10 text-amber-400 border-amber-500/30
+          {% else %}bg-slate-700/60 text-slate-300 border-slate-600{% endif %}">
+          Sample: {{ cum.total_trades }} trades ({{ proj.confidence }})
+        </span>
+      </div>
+      <p class="text-xs text-slate-400 mt-1">
+        Session: <span class="text-slate-200 font-mono">{{ selected_date }}</span>
+        &bull; Regime: <span class="text-sky-400 font-semibold">{{ roi.market_regime }}</span>
+        {% if roi.daily_spy_return_pct is not none %}
+        &bull; SPY: <span class="font-mono {% if roi.daily_spy_return_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(roi.daily_spy_return_pct) }}%</span>
+        {% endif %}
+        {% if roi.daily_alpha_vs_spy_pct is not none %}
+        &bull; Alpha: <span class="font-mono {% if roi.daily_alpha_vs_spy_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(roi.daily_alpha_vs_spy_pct) }}%</span>
+        {% endif %}
+      </p>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2">
+      <form method="get" action="/analytics" class="flex items-center gap-2">
+        <select name="date" onchange="this.form.submit()" class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-sky-500">
+          {% for d in available_dates %}
+          <option value="{{ d }}" {% if d == selected_date %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        </select>
+      </form>
+
+      <form method="post" action="/api/analytics/generate">
+        <input type="hidden" name="date" value="{{ selected_date }}">
+        <button type="submit" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition shadow">
+          Refresh Report
+        </button>
+      </form>
+
+      <a href="/api/analytics/review.md?date={{ selected_date }}" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition">
+        Review .md
+      </a>
+      <a href="/api/analytics/report?date={{ selected_date }}" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition">
+        JSON
+      </a>
+      <a href="/api/analytics/export/csv" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition">
+        CSV
+      </a>
+    </div>
   </div>
 
-  <!-- Historical Performance Table -->
+  <!-- Top KPI Strip -->
+  <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+    <!-- Daily P&L & ROI -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Daily P&amp;L / ROI</div>
+      <div class="mt-1.5 text-lg font-bold font-mono {% if roi.daily_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+        {{ "%+.2f"|format(roi.daily_pnl) | replace("+", "+$") | replace("-", "-$") }}
+      </div>
+      <div class="text-xs font-mono mt-0.5 {% if roi.daily_roi_pct >= 0 %}text-emerald-400/90{% else %}text-rose-400/90{% endif %}">
+        {{ "%+.2f"|format(roi.daily_roi_pct) }}% ({{ daily.total_trades }} trades)
+      </div>
+    </div>
+
+    <!-- Cumulative ROI -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Cumulative ROI</div>
+      <div class="mt-1.5 text-lg font-bold font-mono {% if roi.cumulative_roi_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+        {{ "%+.2f"|format(roi.cumulative_roi_pct) }}%
+      </div>
+      <div class="text-[11px] text-slate-400 mt-0.5 font-mono">
+        MTD {{ "%+.1f"|format(roi.mtd_roi_pct) }}% &bull; DD -{{ "%.1f"|format(roi.max_drawdown_pct) }}%
+      </div>
+    </div>
+
+    <!-- Realized R:R & Expectancy -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Realized R:R</div>
+      <div class="mt-1.5 text-lg font-bold font-mono text-white">
+        {{ "%.2f"|format(cum.realized_rr_r) }} : 1
+      </div>
+      <div class="text-[11px] font-mono mt-0.5 {% if cum.expectancy_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+        Exp {{ "%+.2f"|format(cum.expectancy_r) }}R &bull; WR {{ "%.1f"|format(cum.win_rate_pct) }}%
+      </div>
+    </div>
+
+    <!-- Profit Factor & SQN -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Profit Factor / SQN</div>
+      <div class="mt-1.5 text-lg font-bold font-mono text-sky-400">
+        {{ "%.2f"|format(cum.profit_factor) }}
+      </div>
+      <div class="text-[11px] text-slate-400 mt-0.5 font-mono">
+        SQN {{ "%.2f"|format(cum.sqn) }} &bull; Net {{ "%+.1f"|format(cum.total_r) }}R
+      </div>
+    </div>
+
+    <!-- Risk of Ruin (-20% DD) -->
+    {% set ror20 = ror_a.drawdown_probabilities['20pct'] %}
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Risk of Ruin (-20%)</div>
+      <div class="mt-1.5 text-lg font-bold font-mono {% if ror20 is none %}text-slate-400{% elif ror20 <= 5 %}text-emerald-400{% elif ror20 <= 25 %}text-amber-400{% else %}text-rose-400{% endif %}">
+        {% if ror20 is not none %}{{ "%.2f"|format(ror20) }}%{% else %}N/A{% endif %}
+      </div>
+      <div class="text-[11px] text-slate-400 mt-0.5 font-mono">
+        MC: {% if ror_mc['20pct'] is not none %}{{ "%.1f"|format(ror_mc['20pct']) }}%{% else %}N/A{% endif %} &bull; ½K {{ "%.1f"|format(ror_a.half_kelly_pct) }}%
+      </div>
+    </div>
+
+    <!-- 1Y Median Projection -->
+    {% set h1y = proj.horizons[-1] if proj.horizons else none %}
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">1Y Projected (P50)</div>
+      <div class="mt-1.5 text-lg font-bold font-mono text-indigo-300">
+        {% if h1y %}${{ "{:,.0f}".format(h1y.p50_equity) }}{% else %}N/A{% endif %}
+      </div>
+      <div class="text-[11px] font-mono mt-0.5 {% if h1y and h1y.p50_roi_pct >= 0 %}text-emerald-400{% else %}text-slate-400{% endif %}">
+        {% if h1y %}{{ "%+.1f"|format(h1y.p50_roi_pct) }}% ({{ proj.avg_trades_per_day }}/day){% else %}Need closed trades{% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Daily Deep-Dive Strategy Review Panel -->
+  <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
+    <div class="p-4 border-b border-slate-700/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+      <div class="flex items-center gap-2">
+        <h2 class="text-sm font-bold uppercase tracking-wider text-white">Daily Deep-Dive Strategy Review & Next Steps</h2>
+        <span class="text-[10px] uppercase px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-semibold">
+          {{ review_source }}
+        </span>
+      </div>
+      <div class="flex flex-wrap gap-1.5">
+        {% for d in diagnostics %}
+        <span class="text-[10px] px-2 py-0.5 rounded-full font-semibold border
+          {% if d.severity == 'ACTION' %}bg-rose-500/15 text-rose-300 border-rose-500/40
+          {% elif d.severity == 'WATCH' %}bg-amber-500/15 text-amber-300 border-amber-500/40
+          {% else %}bg-emerald-500/15 text-emerald-300 border-emerald-500/40{% endif %}">
+          {{ d.severity }}: {{ d.title }}
+        </span>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="p-5">
+      <div id="strategy-review-rendered" class="prose prose-invert prose-sm max-w-none text-slate-200 space-y-2 leading-relaxed"></div>
+      <pre id="strategy-review-raw" class="hidden whitespace-pre-wrap text-xs font-mono text-slate-300">{{ review_markdown }}</pre>
+    </div>
+  </div>
+
+  <!-- Interactive Charts Grid -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Equity Curve -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">Equity Curve & Drawdown</h2>
+        <span class="text-[11px] font-mono text-slate-400">
+          Sharpe: {{ roi.sharpe_ratio if roi.sharpe_ratio is not none else 'N/A' }} &bull;
+          Sortino: {{ roi.sortino_ratio if roi.sortino_ratio is not none else 'N/A' }}
+        </span>
+      </div>
+      <div class="h-64">
+        <canvas id="equityChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Future Projections Fan Chart -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">Future Projections (P10 / P50 / P90 Compounding)</h2>
+        <span class="text-[11px] font-mono text-slate-400">Base: ${{ "{:,.0f}".format(proj.base_equity) }}</span>
+      </div>
+      <div class="h-64">
+        <canvas id="projectionChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Risk of Ruin, MFE/MAE & Execution Diagnostics -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Risk of Ruin & Sizing -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow space-y-3">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200 border-b border-slate-700/60 pb-2">
+        Risk of Ruin & Sizing Health
+      </h2>
+      <div class="grid grid-cols-3 gap-2 text-center font-mono text-xs">
+        <div class="bg-slate-900/60 rounded-lg p-2.5 border border-slate-700/40">
+          <div class="text-[10px] text-slate-400">-10% DD</div>
+          <div class="text-sm font-bold text-white mt-0.5">{{ ror_a.drawdown_probabilities['10pct'] if ror_a.drawdown_probabilities['10pct'] is not none else 'N/A' }}%</div>
+          <div class="text-[10px] text-slate-500">MC {{ ror_mc['10pct'] if ror_mc['10pct'] is not none else 'N/A' }}%</div>
+        </div>
+        <div class="bg-slate-900/60 rounded-lg p-2.5 border border-slate-700/40">
+          <div class="text-[10px] text-slate-400">-20% DD</div>
+          <div class="text-sm font-bold text-amber-400 mt-0.5">{{ ror_a.drawdown_probabilities['20pct'] if ror_a.drawdown_probabilities['20pct'] is not none else 'N/A' }}%</div>
+          <div class="text-[10px] text-slate-500">MC {{ ror_mc['20pct'] if ror_mc['20pct'] is not none else 'N/A' }}%</div>
+        </div>
+        <div class="bg-slate-900/60 rounded-lg p-2.5 border border-slate-700/40">
+          <div class="text-[10px] text-slate-400">-50% DD</div>
+          <div class="text-sm font-bold text-rose-400 mt-0.5">{{ ror_a.drawdown_probabilities['50pct'] if ror_a.drawdown_probabilities['50pct'] is not none else 'N/A' }}%</div>
+          <div class="text-[10px] text-slate-500">MC {{ ror_mc['50pct'] if ror_mc['50pct'] is not none else 'N/A' }}%</div>
+        </div>
+      </div>
+      <div class="text-xs space-y-1.5 text-slate-300 font-mono">
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">Full / Half Kelly:</span><span>{{ "%.2f"|format(ror_a.kelly_pct) }}% / {{ "%.2f"|format(ror_a.half_kelly_pct) }}%</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">Active Risk / Trade:</span><span>{{ "%.2f"|format(ror_a.current_risk_pct) }}% ({{ ror_a.sizing_status }})</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">MC Median / P95 Max DD:</span><span>-{{ ror_mc.median_max_dd_pct if ror_mc.median_max_dd_pct is not none else 'N/A' }}% / -{{ ror_mc.p95_max_dd_pct if ror_mc.p95_max_dd_pct is not none else 'N/A' }}%</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">Expected Max Loss Streak:</span><span>{{ ror_mc.expected_max_losing_streak if ror_mc.expected_max_losing_streak is not none else 'N/A' }} trades</span></div>
+      </div>
+    </div>
+
+    <!-- MFE / MAE & Execution Friction -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow space-y-3">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200 border-b border-slate-700/60 pb-2">
+        Excursion (MFE/MAE) & Execution Audit
+      </h2>
+      <div class="text-xs space-y-2 text-slate-300 font-mono">
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">Avg MFE / Avg MAE:</span><span>{{ cum.mfe_mae.avg_mfe_r if cum.mfe_mae.avg_mfe_r is not none else 'N/A' }}R / {{ cum.mfe_mae.avg_mae_r if cum.mfe_mae.avg_mae_r is not none else 'N/A' }}R</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">Edge Ratio (MFE/MAE):</span><span>{{ cum.mfe_mae.edge_ratio if cum.mfe_mae.edge_ratio is not none else 'N/A' }}</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">BE Stepped / Choked (+2R):</span><span>{{ cum.breakeven_audit.stepped_count }} ({{ cum.breakeven_audit.choked_winners_count }} choked)</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">Avg Entry Slippage:</span><span>{{ "%.3f"|format(cum.slippage.avg_slippage_r) }}R (${{ "%.2f"|format(cum.slippage.total_slippage_dollars) }})</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">Signals Today / Expired:</span><span>{{ funnel.total_signals }} / {{ funnel.expired_stale_orders }}</span></div>
+        <div class="flex justify-between"><span class="text-slate-400 font-sans">Return on Risked Capital:</span><span>{{ "%+.1f"|format(cum.return_on_risked_capital_pct) }}%</span></div>
+      </div>
+    </div>
+
+    <!-- R-Multiple Distribution Chart -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200 border-b border-slate-700/60 pb-2 mb-3">
+        R-Multiple Distribution
+      </h2>
+      <div class="h-44">
+        <canvas id="rDistChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Future Projections Breakdown Table -->
+  {% if proj.horizons %}
+  <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
+    <div class="p-4 border-b border-slate-700/60 flex items-center justify-between">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">Forward Equity Projections (If Underlying Trends Continue)</h2>
+      <span class="text-[11px] text-slate-400">Monte Carlo 5,000 bootstrapped paths &bull; {{ proj.avg_trades_per_day }} trades/day</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs font-mono">
+        <thead class="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700/60 font-sans">
+          <tr>
+            <th class="py-2.5 px-4">Horizon</th>
+            <th class="py-2.5 px-4">Est. Trades</th>
+            <th class="py-2.5 px-4">Bear Case (P10)</th>
+            <th class="py-2.5 px-4">Base Case (P50 Median)</th>
+            <th class="py-2.5 px-4">Bull Case (P90)</th>
+            <th class="py-2.5 px-4">Geometric Path</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-700/40">
+          {% for h in proj.horizons %}
+          <tr class="hover:bg-slate-700/20">
+            <td class="py-2.5 px-4 font-sans font-semibold text-white">{{ h.label }}</td>
+            <td class="py-2.5 px-4 text-slate-300">{{ h.projected_trades }}</td>
+            <td class="py-2.5 px-4 {% if h.p10_roi_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+              ${{ "{:,.2f}".format(h.p10_equity) }} ({{ "%+.1f"|format(h.p10_roi_pct) }}%)
+            </td>
+            <td class="py-2.5 px-4 font-bold {% if h.p50_roi_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+              ${{ "{:,.2f}".format(h.p50_equity) }} ({{ "%+.1f"|format(h.p50_roi_pct) }}%)
+            </td>
+            <td class="py-2.5 px-4 text-sky-400">
+              ${{ "{:,.2f}".format(h.p90_equity) }} ({{ "%+.1f"|format(h.p90_roi_pct) }}%)
+            </td>
+            <td class="py-2.5 px-4 text-slate-300">${{ "{:,.2f}".format(h.geometric_equity) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Historical Daily Performance Table -->
   <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
     <div class="p-4 border-b border-slate-700/60">
-      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-200">Daily Performance Log</h2>
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">Daily Performance Log</h2>
     </div>
     <div class="overflow-x-auto">
       <table class="w-full text-left text-xs">
@@ -19,21 +300,28 @@
             <th class="py-3 px-4">Date</th>
             <th class="py-3 px-4">Starting Equity</th>
             <th class="py-3 px-4">Ending Equity</th>
-            <th class="py-3 px-4">Realized P&L</th>
+            <th class="py-3 px-4">Daily ROI</th>
+            <th class="py-3 px-4">Realized P&amp;L</th>
             <th class="py-3 px-4">Trades</th>
+            <th class="py-3 px-4">Regime</th>
             <th class="py-3 px-4">Circuit Breaker</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-700/40 font-mono">
           {% for d in daily_records %}
+          {% set d_roi = ((d.current_equity - d.starting_equity) / d.starting_equity * 100.0) if d.starting_equity > 0 else 0.0 %}
           <tr class="hover:bg-slate-700/20 transition">
-            <td class="py-3 px-4 font-bold text-white">{{ d.date }}</td>
-            <td class="py-3 px-4">${{ "%.2f"|format(d.starting_equity) }}</td>
-            <td class="py-3 px-4">${{ "%.2f"|format(d.current_equity) }}</td>
-            <td class="py-3 px-4 font-bold {% if d.realized_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-              {% if d.realized_pnl >= 0 %}+{% endif %}${{ "%.2f"|format(d.realized_pnl) }}
+            <td class="py-3 px-4 font-bold text-white"><a href="/analytics?date={{ d.date }}" class="hover:text-sky-400">{{ d.date }}</a></td>
+            <td class="py-3 px-4">${{ "{:,.2f}".format(d.starting_equity) }}</td>
+            <td class="py-3 px-4">${{ "{:,.2f}".format(d.current_equity) }}</td>
+            <td class="py-3 px-4 font-bold {% if d_roi >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+              {{ "%+.2f"|format(d_roi) }}%
+            </td>
+            <td class="py-3 px-4 font-bold {% if (d.realized_pnl or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+              {% if (d.realized_pnl or 0) >= 0 %}+{% endif %}${{ "%.2f"|format(d.realized_pnl or 0.0) }}
             </td>
             <td class="py-3 px-4">{{ d.trade_count }}</td>
+            <td class="py-3 px-4 font-sans text-slate-300">{{ d.market_regime or '—' }}</td>
             <td class="py-3 px-4">
               {% if d.circuit_breaker_tripped %}
               <span class="text-rose-400 font-bold">TRIPPED (-2%)</span>
@@ -44,7 +332,7 @@
           </tr>
           {% else %}
           <tr>
-            <td colspan="6" class="py-6 text-center text-slate-500 font-sans">No historical days logged yet.</td>
+            <td colspan="8" class="py-6 text-center text-slate-500 font-sans">No historical days logged yet.</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -52,32 +340,47 @@
     </div>
   </div>
 
-  <!-- Closed Trades Log -->
+  <!-- Closed Trades Audit Log -->
   <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
     <div class="p-4 border-b border-slate-700/60">
-      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-200">Completed Trades History</h2>
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">Completed Trades Audit Log</h2>
     </div>
     <div class="overflow-x-auto">
       <table class="w-full text-left text-xs">
         <thead class="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700/60">
           <tr>
+            <th class="py-3 px-4">Date</th>
             <th class="py-3 px-4">Symbol</th>
             <th class="py-3 px-4">Qty</th>
             <th class="py-3 px-4">Entry</th>
             <th class="py-3 px-4">Exit</th>
             <th class="py-3 px-4">Reason</th>
-            <th class="py-3 px-4">P&L ($)</th>
+            <th class="py-3 px-4">MFE / MAE</th>
+            <th class="py-3 px-4">P&amp;L ($)</th>
             <th class="py-3 px-4">R-Multiple</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-700/40 font-mono">
           {% for t in closed_trades %}
           <tr class="hover:bg-slate-700/20 transition">
+            <td class="py-3 px-4 text-slate-400">{{ t.trade_date or (t.entry_time or '')[:10] }}</td>
             <td class="py-3 px-4 font-bold text-white">{{ t.symbol }}</td>
             <td class="py-3 px-4">{{ t.qty }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(t.entry_price) }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(t.exit_price or 0.0) }}</td>
-            <td class="py-3 px-4 font-sans">{{ t.exit_reason }}</td>
+            <td class="py-3 px-4 font-sans">
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold
+                {% if t.exit_reason == 'TAKE_PROFIT' %}bg-emerald-500/15 text-emerald-300
+                {% elif t.exit_reason == 'STOP_LOSS' %}bg-rose-500/15 text-rose-300
+                {% elif t.exit_reason == 'BREAKEVEN' %}bg-sky-500/15 text-sky-300
+                {% else %}bg-slate-700 text-slate-300{% endif %}">
+                {{ t.exit_reason or 'UNKNOWN' }}
+              </span>
+            </td>
+            <td class="py-3 px-4 text-slate-300">
+              {% if t.mfe_r is not none %}+{{ "%.1f"|format(t.mfe_r) }}R{% else %}—{% endif %} /
+              {% if t.mae_r is not none %}-{{ "%.1f"|format(t.mae_r) }}R{% else %}—{% endif %}
+            </td>
             <td class="py-3 px-4 font-bold {% if (t.pnl_dollars or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
               {% if (t.pnl_dollars or 0) >= 0 %}+{% endif %}${{ "%.2f"|format(t.pnl_dollars or 0.0) }}
             </td>
@@ -87,7 +390,7 @@
           </tr>
           {% else %}
           <tr>
-            <td colspan="7" class="py-6 text-center text-slate-500 font-sans">No completed trades recorded yet.</td>
+            <td colspan="9" class="py-6 text-center text-slate-500 font-sans">No completed trades recorded yet.</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -95,4 +398,123 @@
     </div>
   </div>
 </div>
+
+<!-- Chart.js & Marked.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+  const REPORT = {{ report_json | safe }};
+
+  // Render Strategy Review Markdown
+  (function renderReview() {
+    const rawEl = document.getElementById("strategy-review-raw");
+    const targetEl = document.getElementById("strategy-review-rendered");
+    if (window.marked && rawEl && targetEl) {
+      targetEl.innerHTML = marked.parse(rawEl.textContent || "");
+      targetEl.querySelectorAll("h1").forEach(el => el.className = "text-base font-bold text-white mb-2");
+      targetEl.querySelectorAll("h2").forEach(el => el.className = "text-sm font-bold text-sky-400 mt-4 mb-1.5");
+      targetEl.querySelectorAll("h3").forEach(el => el.className = "text-xs font-bold uppercase tracking-wider text-slate-300 mt-3 mb-1");
+      targetEl.querySelectorAll("ul").forEach(el => el.className = "list-disc pl-5 space-y-1 text-xs text-slate-200");
+      targetEl.querySelectorAll("code").forEach(el => el.className = "px-1 py-0.5 rounded bg-slate-900 text-sky-300 font-mono text-[11px]");
+    } else if (rawEl) {
+      rawEl.classList.remove("hidden");
+    }
+  })();
+
+  if (window.Chart) {
+    Chart.defaults.color = "#94a3b8";
+    Chart.defaults.borderColor = "rgba(51, 65, 85, 0.5)";
+
+    // 1. Equity Curve Chart
+    const curve = REPORT.roi_equity.equity_curve || [];
+    new Chart(document.getElementById("equityChart"), {
+      type: "line",
+      data: {
+        labels: curve.length ? curve.map(c => c.date) : ["Start"],
+        datasets: [{
+          label: "Account Equity ($)",
+          data: curve.length ? curve.map(c => c.equity) : [REPORT.projections.base_equity],
+          borderColor: "#38bdf8",
+          backgroundColor: "rgba(56, 189, 248, 0.12)",
+          fill: true,
+          tension: 0.25,
+          pointRadius: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { ticks: { callback: v => "$" + Number(v).toLocaleString() } } }
+      }
+    });
+
+    // 2. Projection Fan Chart
+    const horizons = REPORT.projections.horizons || [];
+    const baseEq = REPORT.projections.base_equity;
+    const pLabels = ["Today", ...horizons.map(h => h.label)];
+    new Chart(document.getElementById("projectionChart"), {
+      type: "line",
+      data: {
+        labels: pLabels,
+        datasets: [
+          {
+            label: "Bull (P90)",
+            data: [baseEq, ...horizons.map(h => h.p90_equity)],
+            borderColor: "#34d399",
+            borderDash: [4, 4],
+            tension: 0.25,
+            pointRadius: 2
+          },
+          {
+            label: "Base Median (P50)",
+            data: [baseEq, ...horizons.map(h => h.p50_equity)],
+            borderColor: "#818cf8",
+            backgroundColor: "rgba(129, 140, 248, 0.12)",
+            fill: true,
+            borderWidth: 2.5,
+            tension: 0.25,
+            pointRadius: 3
+          },
+          {
+            label: "Bear (P10)",
+            data: [baseEq, ...horizons.map(h => h.p10_equity)],
+            borderColor: "#fb7185",
+            borderDash: [4, 4],
+            tension: 0.25,
+            pointRadius: 2
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: { y: { ticks: { callback: v => "$" + Number(v).toLocaleString() } } }
+      }
+    });
+
+    // 3. R-Multiple Distribution Chart
+    const rDist = REPORT.cumulative_trades_metrics.r_distribution || {};
+    const rLabels = Object.keys(rDist);
+    const rCounts = Object.values(rDist);
+    new Chart(document.getElementById("rDistChart"), {
+      type: "bar",
+      data: {
+        labels: rLabels,
+        datasets: [{
+          label: "Trades",
+          data: rCounts,
+          backgroundColor: ["#f43f5e", "#fb7185", "#64748b", "#38bdf8", "#34d399", "#10b981"],
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true, ticks: { precision: 0 } } }
+      }
+    });
+  }
+</script>
 {% endblock %}

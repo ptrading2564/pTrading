@@ -153,3 +153,71 @@ async def test_lifecycle_cancel_stale_orders():
     await worker.cancel_stale_orders()
 
     mock_broker.cancel_order.assert_called_once_with("order_stale")
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_sync_closed_trades_reconciles_pnl_and_r():
+    from tests.test_risk_manager import MockBroker
+    mock_broker = MockBroker(equity=50500.0)
+    worker = LifecycleWorker(mock_broker)
+
+    async with get_connection() as conn:
+        await conn.execute("DELETE FROM trades;")
+        await conn.execute(
+            """
+            INSERT INTO trades (
+                client_order_id, symbol, qty, entry_price, stop_loss_price,
+                initial_stop_price, initial_risk_dollars, take_profit_price,
+                signal_price, is_open, breakeven_stepped
+            )
+            VALUES ('pt_nvda_999', 'NVDA', 100, 100.05, 100.07, 97.55, 250.0, 105.05, 100.00, 1, 1);
+            """
+        )
+        await conn.commit()
+
+    # Position closed via Take-Profit leg at 105.05
+    tp_leg = OrderInfo(
+        "tp_1", "c_tp_1", "NVDA", "filled", "sell", 100, 100, 105.05, None,
+        datetime.now(timezone.utc), datetime.now(timezone.utc), filled_avg_price=105.05,
+    )
+    parent = OrderInfo(
+        "p_1", "pt_nvda_999", "NVDA", "filled", "buy", 100, 100, 100.05, None,
+        datetime.now(timezone.utc), datetime.now(timezone.utc), legs=[tp_leg], filled_avg_price=100.05,
+    )
+    mock_broker.positions = []
+    mock_broker.get_closed_orders = AsyncMock(return_value=[parent])
+
+    await worker.sync_closed_trades()
+
+    async with get_connection() as conn:
+        row = await (
+            await conn.execute("SELECT * FROM trades WHERE client_order_id = 'pt_nvda_999';")
+        ).fetchone()
+        assert row["is_open"] == 0
+        assert row["exit_price"] == 105.05
+        assert row["exit_reason"] == "TAKE_PROFIT"
+        assert row["pnl_dollars"] == 500.0
+        assert row["pnl_r"] == 2.0
+        assert row["slippage_dollars"] == 0.05
+
+
+@pytest.mark.asyncio
+async def test_analytics_dashboard_and_exports():
+    auth = (settings.DASHBOARD_USERNAME, settings.DASHBOARD_PASSWORD)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        res_html = await client.get("/analytics", auth=auth)
+        assert res_html.status_code == 200
+        assert "Daily Comprehensive Analysis" in res_html.text
+
+        res_json = await client.get("/api/analytics/report", auth=auth)
+        assert res_json.status_code == 200
+        payload = res_json.json()
+        assert "report" in payload and "review_markdown" in payload
+
+        res_md = await client.get("/api/analytics/review.md", auth=auth)
+        assert res_md.status_code == 200
+        assert "# Daily Strategy Review" in res_md.text
+
+        res_csv = await client.get("/api/analytics/export/csv", auth=auth)
+        assert res_csv.status_code == 200
+        assert "trade_date,symbol,qty" in res_csv.text

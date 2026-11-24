@@ -125,5 +125,48 @@ class TelegramService:
         )
         return await self.send_message(text)
 
+    async def notify_daily_report(
+        self, report: Dict[str, Any], diagnostics: Optional[list] = None
+    ) -> bool:
+        """Sends a concise, scannable End-of-Day comprehensive trading & strategy digest."""
+        d_date = report.get("report_date", "")
+        roi = report.get("roi_equity", {})
+        daily = report.get("daily_trades_metrics", {})
+        cum = report.get("cumulative_trades_metrics", {})
+        ror = report.get("risk_of_ruin", {})
+        proj = report.get("projections", {})
+
+        pnl = float(roi.get("daily_pnl", 0.0))
+        pnl_icon = "🟢" if pnl >= 0 else "🔴"
+        ror_20 = ror.get("analytical", {}).get("drawdown_probabilities", {}).get("20pct")
+        ror_str = f"{ror_20:.2f}%" if ror_20 is not None else "N/A"
+
+        horizons = proj.get("horizons", [])
+        proj_line = "Insufficient data"
+        if horizons:
+            h1y = horizons[-1]
+            proj_line = f"${h1y['p50_equity']:,.0f} ({h1y['p50_roi_pct']:+.1f}%)"
+
+        top_notes = ""
+        if diagnostics:
+            highlights = [
+                f"• [{d['severity']}] {d['title']}"
+                for d in diagnostics[:3]
+            ]
+            top_notes = "\n\n<b>Strategy Review Highlights:</b>\n" + "\n".join(highlights)
+
+        text = (
+            f"{pnl_icon} <b>Daily Comprehensive Report ({d_date})</b>\n"
+            f"<b>Daily P&amp;L:</b> ${pnl:+,.2f} ({roi.get('daily_roi_pct', 0.0):+.2f}%)\n"
+            f"<b>Equity:</b> ${roi.get('daily_ending_equity', 0.0):,.2f} | <b>Cum ROI:</b> {roi.get('cumulative_roi_pct', 0.0):+.2f}%\n"
+            f"<b>Trades Today:</b> {daily.get('total_trades', 0)} ({daily.get('wins', 0)}W/{daily.get('losses', 0)}L/{daily.get('breakevens', 0)}BE | {daily.get('total_r', 0.0):+.2f}R)\n"
+            f"<b>Realized R:R:</b> {cum.get('realized_rr_r', 0.0):.2f}:1 | <b>Expectancy:</b> {cum.get('expectancy_r', 0.0):+.2f}R\n"
+            f"<b>Risk of Ruin (-20% DD):</b> {ror_str} | <b>PF:</b> {cum.get('profit_factor', 0.0):.2f}\n"
+            f"<b>1Y Median Projection:</b> {proj_line}"
+            f"{top_notes}\n\n"
+            f"<i>Open /analytics for full charts &amp; written strategy review.</i>"
+        )
+        return await self.send_message(text)
+
 
 telegram = TelegramService()

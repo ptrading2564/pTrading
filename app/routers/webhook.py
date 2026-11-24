@@ -1,7 +1,9 @@
 """TradingView Webhook ingestion router with IP allowlisting, secret validation, and idempotency."""
 
 import json
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
+from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 import logging
@@ -66,6 +68,11 @@ async def execute_order_for_signal(
     stop_loss_price: float,
     take_profit_price: float,
     bar_time: int,
+    signal_price: Optional[float] = None,
+    stop_type: Optional[str] = None,
+    signal_rvol: Optional[float] = None,
+    signal_atr_ext: Optional[float] = None,
+    or_width_pct: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Submits the bracket order to the broker and records order/trade in DB."""
     client_order_id = f"pt_{symbol.lower()}_{bar_time}"
@@ -78,6 +85,9 @@ async def execute_order_for_signal(
         take_profit_price=take_profit_price,
         client_order_id=client_order_id,
     )
+
+    initial_risk_dollars = round(max(entry_limit_price - stop_loss_price, 0.0) * qty, 2)
+    trade_date = datetime.now(ZoneInfo(settings.MARKET_TIMEZONE)).strftime("%Y-%m-%d")
 
     async with get_connection() as conn:
         # Record into orders table
@@ -96,17 +106,22 @@ async def execute_order_for_signal(
                 entry_limit_price,
                 stop_loss_price,
                 take_profit_price,
-                order_result["stop_order_id"],
-                order_result["tp_order_id"],
+                order_result.get("stop_order_id"),
+                order_result.get("tp_order_id"),
                 order_result["status"],
             ),
         )
 
-        # Record into trades table
+        # Record into trades table with full risk & signal attribution
         await conn.execute(
             """
-            INSERT INTO trades (client_order_id, symbol, qty, entry_price, stop_loss_price, take_profit_price)
-            VALUES (?, ?, ?, ?, ?, ?);
+            INSERT INTO trades (
+                client_order_id, symbol, qty, entry_price,
+                stop_loss_price, initial_stop_price, initial_risk_dollars,
+                take_profit_price, signal_price, stop_type,
+                signal_rvol, signal_atr_ext, or_width_pct, trade_date
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 client_order_id,
@@ -114,7 +129,15 @@ async def execute_order_for_signal(
                 qty,
                 entry_limit_price,
                 stop_loss_price,
+                stop_loss_price,
+                initial_risk_dollars,
                 take_profit_price,
+                signal_price if signal_price is not None else entry_limit_price,
+                stop_type,
+                signal_rvol,
+                signal_atr_ext,
+                or_width_pct,
+                trade_date,
             ),
         )
         await conn.commit()

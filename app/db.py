@@ -88,7 +88,20 @@ async def init_db() -> None:
                 entry_price REAL NOT NULL,
                 entry_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 stop_loss_price REAL NOT NULL,
+                initial_stop_price REAL,
+                initial_risk_dollars REAL,
                 take_profit_price REAL NOT NULL,
+                signal_price REAL,
+                slippage_dollars REAL,
+                slippage_r REAL,
+                stop_type TEXT,
+                signal_rvol REAL,
+                signal_atr_ext REAL,
+                or_width_pct REAL,
+                mfe_r REAL,
+                mae_r REAL,
+                post_exit_max_r REAL,
+                trade_date TEXT,
                 exit_price REAL,
                 exit_time TIMESTAMP,
                 pnl_dollars REAL,
@@ -111,9 +124,55 @@ async def init_db() -> None:
                 unrealized_pnl REAL DEFAULT 0.0,
                 trade_count INTEGER DEFAULT 0,
                 circuit_breaker_tripped INTEGER DEFAULT 0,
+                spy_return_pct REAL,
+                qqq_return_pct REAL,
+                market_regime TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """
+        )
+
+        # Daily comprehensive reports table
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_reports (
+                date TEXT PRIMARY KEY,
+                metrics_json TEXT NOT NULL,
+                review_markdown TEXT NOT NULL,
+                review_source TEXT NOT NULL DEFAULT 'deterministic',
+                generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+        # Idempotent migrations for existing databases
+        await _ensure_columns(
+            conn,
+            "trades",
+            {
+                "initial_stop_price": "REAL",
+                "initial_risk_dollars": "REAL",
+                "signal_price": "REAL",
+                "slippage_dollars": "REAL",
+                "slippage_r": "REAL",
+                "stop_type": "TEXT",
+                "signal_rvol": "REAL",
+                "signal_atr_ext": "REAL",
+                "or_width_pct": "REAL",
+                "mfe_r": "REAL",
+                "mae_r": "REAL",
+                "post_exit_max_r": "REAL",
+                "trade_date": "TEXT",
+            },
+        )
+        await _ensure_columns(
+            conn,
+            "daily_stats",
+            {
+                "spy_return_pct": "REAL",
+                "qqq_return_pct": "REAL",
+                "market_regime": "TEXT",
+            },
         )
 
         # System state key-value table
@@ -142,6 +201,17 @@ async def init_db() -> None:
             """,
         )
         await conn.commit()
+
+
+async def _ensure_columns(
+    conn: aiosqlite.Connection, table: str, columns: Dict[str, str]
+) -> None:
+    """Adds missing columns to an existing SQLite table idempotently."""
+    cursor = await conn.execute(f"PRAGMA table_info({table});")
+    existing = {row["name"] for row in await cursor.fetchall()}
+    for col_name, col_type in columns.items():
+        if col_name not in existing:
+            await conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type};")
 
 
 # Helper Functions for DB Queries
@@ -223,3 +293,52 @@ async def get_open_trades() -> List[Dict[str, Any]]:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+
+async def save_daily_report(
+    report_date: str,
+    metrics: Dict[str, Any],
+    review_markdown: str,
+    review_source: str = "deterministic",
+) -> None:
+    """Persists or updates a daily comprehensive analysis report."""
+    async with get_connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO daily_reports (date, metrics_json, review_markdown, review_source, generated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(date) DO UPDATE SET
+                metrics_json = excluded.metrics_json,
+                review_markdown = excluded.review_markdown,
+                review_source = excluded.review_source,
+                generated_at = CURRENT_TIMESTAMP;
+            """,
+            (report_date, json.dumps(metrics), review_markdown, review_source),
+        )
+        await conn.commit()
+
+
+async def get_daily_report(report_date: str) -> Optional[Dict[str, Any]]:
+    """Fetches a stored daily report by YYYY-MM-DD date."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            "SELECT * FROM daily_reports WHERE date = ?;", (report_date,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        try:
+            data["metrics"] = json.loads(data["metrics_json"])
+        except Exception:
+            data["metrics"] = {}
+        return data
+
+
+async def list_daily_report_dates(limit: int = 60) -> List[str]:
+    """Returns stored report dates in descending order."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            "SELECT date FROM daily_reports ORDER BY date DESC LIMIT ?;", (limit,)
+        )
+        return [row["date"] for row in await cursor.fetchall()]

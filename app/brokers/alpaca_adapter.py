@@ -66,48 +66,68 @@ class AlpacaAdapter(BrokerAdapter):
             )
         return positions
 
+    @staticmethod
+    def _parse_order(o: Any) -> OrderInfo:
+        legs: List[OrderInfo] = []
+        if getattr(o, "legs", None):
+            for leg in o.legs:
+                legs.append(
+                    OrderInfo(
+                        order_id=str(leg.id),
+                        client_order_id=str(leg.client_order_id or ""),
+                        symbol=leg.symbol,
+                        status=str(leg.status),
+                        side=str(leg.side),
+                        qty=int(leg.qty),
+                        filled_qty=int(leg.filled_qty or 0),
+                        limit_price=float(leg.limit_price) if leg.limit_price else None,
+                        stop_price=float(leg.stop_price) if leg.stop_price else None,
+                        created_at=leg.created_at,
+                        filled_at=leg.filled_at,
+                        filled_avg_price=float(leg.filled_avg_price) if getattr(leg, "filled_avg_price", None) else None,
+                    )
+                )
+
+        return OrderInfo(
+            order_id=str(o.id),
+            client_order_id=str(o.client_order_id or ""),
+            symbol=o.symbol,
+            status=str(o.status),
+            side=str(o.side),
+            qty=int(o.qty),
+            filled_qty=int(o.filled_qty or 0),
+            limit_price=float(o.limit_price) if o.limit_price else None,
+            stop_price=float(o.stop_price) if o.stop_price else None,
+            created_at=o.created_at,
+            filled_at=o.filled_at,
+            legs=legs,
+            filled_avg_price=float(o.filled_avg_price) if getattr(o, "filled_avg_price", None) else None,
+        )
+
     async def get_open_orders(self) -> List[OrderInfo]:
         """Fetch all pending open orders (including bracket legs)."""
         req = GetOrdersRequest(status=QueryOrderStatus.OPEN, nested=True)
         raw_orders = await asyncio.to_thread(self.client.get_orders, filter=req)
-        orders: List[OrderInfo] = []
-        for o in raw_orders:
-            legs = []
-            if getattr(o, "legs", None):
-                for leg in o.legs:
-                    legs.append(
-                        OrderInfo(
-                            order_id=str(leg.id),
-                            client_order_id=str(leg.client_order_id or ""),
-                            symbol=leg.symbol,
-                            status=str(leg.status),
-                            side=str(leg.side),
-                            qty=int(leg.qty),
-                            filled_qty=int(leg.filled_qty or 0),
-                            limit_price=float(leg.limit_price) if leg.limit_price else None,
-                            stop_price=float(leg.stop_price) if leg.stop_price else None,
-                            created_at=leg.created_at,
-                            filled_at=leg.filled_at,
-                        )
-                    )
+        return [self._parse_order(o) for o in raw_orders]
 
-            orders.append(
-                OrderInfo(
-                    order_id=str(o.id),
-                    client_order_id=str(o.client_order_id or ""),
-                    symbol=o.symbol,
-                    status=str(o.status),
-                    side=str(o.side),
-                    qty=int(o.qty),
-                    filled_qty=int(o.filled_qty or 0),
-                    limit_price=float(o.limit_price) if o.limit_price else None,
-                    stop_price=float(o.stop_price) if o.stop_price else None,
-                    created_at=o.created_at,
-                    filled_at=o.filled_at,
-                    legs=legs,
-                )
-            )
-        return orders
+    async def get_order_by_client_id(self, client_order_id: str) -> Optional[OrderInfo]:
+        """Fetches a specific order (with nested legs) by client_order_id."""
+        try:
+            raw_order = await asyncio.to_thread(self.client.get_order_by_client_id, client_order_id)
+            return self._parse_order(raw_order) if raw_order else None
+        except Exception as e:
+            logger.debug("Order lookup by client_order_id %s failed: %s", client_order_id, e)
+            return None
+
+    async def get_closed_orders(self, after: Optional[datetime] = None) -> List[OrderInfo]:
+        """Fetches closed orders (with nested legs) for fill & exit price reconciliation."""
+        try:
+            req = GetOrdersRequest(status=QueryOrderStatus.CLOSED, nested=True, after=after, limit=200)
+            raw_orders = await asyncio.to_thread(self.client.get_orders, filter=req)
+            return [self._parse_order(o) for o in raw_orders]
+        except Exception as e:
+            logger.warning("Failed to fetch closed orders from Alpaca: %s", e)
+            return []
 
     async def submit_bracket_order(
         self,
