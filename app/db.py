@@ -165,6 +165,9 @@ async def init_db() -> None:
                 valuation_rating REAL,
                 sector TEXT,
                 industry TEXT,
+                adr_pct REAL,
+                rs_3m REAL,
+                short_float_pct REAL,
                 next_earnings_date TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (date, symbol)
@@ -199,6 +202,15 @@ async def init_db() -> None:
                 "spy_return_pct": "REAL",
                 "qqq_return_pct": "REAL",
                 "market_regime": "TEXT",
+            },
+        )
+        await _ensure_columns(
+            conn,
+            "chartmill_universe",
+            {
+                "adr_pct": "REAL",
+                "rs_3m": "REAL",
+                "short_float_pct": "REAL",
             },
         )
 
@@ -384,9 +396,9 @@ async def save_chartmill_universe(trade_date: str, candidates: List[Any]) -> int
                     setup_rating, tech_rating, relative_strength, composite_score,
                     fundamental_rating, growth_rating, health_rating,
                     profitability_rating, valuation_rating, sector, industry,
-                    next_earnings_date, updated_at
+                    adr_pct, rs_3m, short_float_pct, next_earnings_date, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(date, symbol) DO UPDATE SET
                     company_name = excluded.company_name,
                     price = excluded.price,
@@ -402,6 +414,9 @@ async def save_chartmill_universe(trade_date: str, candidates: List[Any]) -> int
                     valuation_rating = excluded.valuation_rating,
                     sector = excluded.sector,
                     industry = excluded.industry,
+                    adr_pct = excluded.adr_pct,
+                    rs_3m = excluded.rs_3m,
+                    short_float_pct = excluded.short_float_pct,
                     next_earnings_date = excluded.next_earnings_date,
                     updated_at = CURRENT_TIMESTAMP;
                 """,
@@ -422,6 +437,9 @@ async def save_chartmill_universe(trade_date: str, candidates: List[Any]) -> int
                     c.valuation_rating,
                     c.sector,
                     c.industry,
+                    getattr(c, "adr_pct", None),
+                    getattr(c, "rs_3m", None),
+                    getattr(c, "short_float_pct", None),
                     c.next_earnings_date,
                 ),
             )

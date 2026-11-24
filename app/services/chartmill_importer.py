@@ -38,6 +38,9 @@ class ScreenerCandidate:
     valuation_rating: Optional[float] = None
     sector: Optional[str] = None
     industry: Optional[str] = None
+    adr_pct: Optional[float] = None
+    rs_3m: Optional[float] = None
+    short_float_pct: Optional[float] = None
 
 
 class ChartMillImporter:
@@ -125,22 +128,25 @@ class ChartMillImporter:
         # Map normalized header names to original
         header_map = {self._normalize_header(h): h for h in reader.fieldnames}
 
-        # Identify key columns
+        # Identify key columns (supports both verbose names and ChartMill's compact headers: TA, FA, CRS, ADR(20)%, etc.)
         ticker_col = next((header_map[k] for k in header_map if k in ("ticker", "symbol")), None)
-        price_col = next((header_map[k] for k in header_map if k in ("price", "close", "last")), None)
+        price_col = next((header_map[k] for k in header_map if k in ("price", "close", "last", "last_price")), None)
         atr_col = next((header_map[k] for k in header_map if "atr" in k), None)
+        adr_col = next((header_map[k] for k in header_map if "adr" in k or "average_daily_range" in k), None)
         sr_col = next((header_map[k] for k in header_map if "setup" in k), None)
-        tr_col = next((header_map[k] for k in header_map if "tech" in k), None)
-        rs_col = next((header_map[k] for k in header_map if "relative_strength" in k or k == "rs"), None)
+        tr_col = next((header_map[k] for k in header_map if "tech" in k or k == "ta"), None)
+        rs_3m_col = next((header_map[k] for k in header_map if ("3_month" in k or "3m" in k) and ("rs" in k or "crs" in k or "relative_strength" in k)), None)
+        rs_col = next((header_map[k] for k in header_map if header_map[k] != rs_3m_col and ("relative_strength" in k or k in ("rs", "crs"))), None)
         name_col = next((header_map[k] for k in header_map if "name" in k or "company" in k), None)
         earnings_col = next((header_map[k] for k in header_map if "earning" in k), None)
-        fund_col = next((header_map[k] for k in header_map if "fund" in k), None)
+        fund_col = next((header_map[k] for k in header_map if "fund" in k or k == "fa"), None)
         growth_col = next((header_map[k] for k in header_map if "growth" in k), None)
         health_col = next((header_map[k] for k in header_map if "health" in k), None)
         profit_col = next((header_map[k] for k in header_map if "profit" in k), None)
         val_col = next((header_map[k] for k in header_map if "val" in k and "avg" not in k), None)
         sector_col = next((header_map[k] for k in header_map if k == "sector" or "sector" in k), None)
         industry_col = next((header_map[k] for k in header_map if k == "industry" or "industry" in k), None)
+        short_float_col = next((header_map[k] for k in header_map if "short" in k and ("float" in k or "interest" in k)), None)
 
         if not ticker_col:
             raise ValueError("CSV missing required 'Ticker' or 'Symbol' column.")
@@ -192,6 +198,9 @@ class ChartMillImporter:
                 valuation_rating=self._parse_float(row.get(val_col)) if (val_col and row.get(val_col)) else None,
                 sector=row.get(sector_col, "").strip() or None if sector_col else None,
                 industry=row.get(industry_col, "").strip() or None if industry_col else None,
+                adr_pct=self._parse_float(row.get(adr_col)) if (adr_col and row.get(adr_col)) else None,
+                rs_3m=self._parse_float(row.get(rs_3m_col)) if (rs_3m_col and row.get(rs_3m_col)) else None,
+                short_float_pct=self._parse_float(row.get(short_float_col)) if (short_float_col and row.get(short_float_col)) else None,
             )
 
             if is_risk:

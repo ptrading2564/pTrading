@@ -179,7 +179,9 @@
           if (cm.setup_rating != null) items.push(`<span>Setup <strong class="text-sky-400">${Number(cm.setup_rating).toFixed(0)}/10</strong></span>`);
           if (cm.relative_strength != null) items.push(`<span>RS <strong class="text-white">${Number(cm.relative_strength).toFixed(0)}</strong></span>`);
           if (cm.fundamental_rating != null) items.push(`<span>Fund <strong class="text-indigo-300">${Number(cm.fundamental_rating).toFixed(0)}/10</strong></span>`);
+          if (cm.adr_pct != null) items.push(`<span>ADR% <strong class="text-slate-200">${Number(cm.adr_pct).toFixed(1)}%</strong></span>`);
           if (cm.atr_pct != null) items.push(`<span>ATR% <strong class="text-slate-200">${Number(cm.atr_pct).toFixed(1)}%</strong></span>`);
+          if (cm.short_float_pct != null) items.push(`<span>Short <strong class="text-amber-300">${Number(cm.short_float_pct).toFixed(1)}%</strong></span>`);
           if (cm.sector) items.push(`<span class="font-sans text-slate-300">Sector: <strong class="text-white">${cm.sector}</strong></span>`);
           if (cm.next_earnings_date) items.push(`<span class="text-amber-300">Earnings: ${cm.next_earnings_date}</span>`);
           cmStrip.innerHTML = items.join("");
