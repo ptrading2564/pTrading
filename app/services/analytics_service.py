@@ -369,6 +369,12 @@ class AnalyticsService:
                 "stop_type_buckets": {},
                 "rvol_buckets": {},
                 "atr_ext_buckets": {},
+                "chartmill_attribution": {
+                    "setup_rating_buckets": {},
+                    "tech_rating_buckets": {},
+                    "fundamental_rating_buckets": {},
+                    "sector_buckets": {},
+                },
                 "cluster_stop_events": [],
                 "r_distribution": {},
                 "rolling_expectancy_10": None,
@@ -394,6 +400,10 @@ class AnalyticsService:
         stop_map: Dict[str, List[float]] = {}
         rvol_map: Dict[str, List[float]] = {}
         atr_map: Dict[str, List[float]] = {}
+        cm_setup_map: Dict[str, List[float]] = {}
+        cm_tech_map: Dict[str, List[float]] = {}
+        cm_fund_map: Dict[str, List[float]] = {}
+        cm_sector_map: Dict[str, List[float]] = {}
 
         mfe_vals: List[float] = []
         mae_vals: List[float] = []
@@ -530,6 +540,19 @@ class AnalyticsService:
                 ak = "0.0-0.25" if ae < 0.25 else ("0.25-0.50" if ae < 0.50 else "0.50-0.75+")
                 atr_map.setdefault(ak, []).append(r_eff)
 
+            # ChartMill rating & sector attribution buckets
+            if t.get("cm_setup_rating") is not None:
+                sr = float(t["cm_setup_rating"])
+                cm_setup_map.setdefault("Setup >= 8" if sr >= 8.0 else "Setup < 8", []).append(r_eff)
+            if t.get("cm_tech_rating") is not None:
+                tr_v = float(t["cm_tech_rating"])
+                cm_tech_map.setdefault("Tech >= 8" if tr_v >= 8.0 else "Tech < 8", []).append(r_eff)
+            if t.get("cm_fundamental_rating") is not None:
+                fr = float(t["cm_fundamental_rating"])
+                cm_fund_map.setdefault("Fund >= 5" if fr >= 5.0 else "Fund < 5", []).append(r_eff)
+            if t.get("cm_sector"):
+                cm_sector_map.setdefault(str(t["cm_sector"]), []).append(r_eff)
+
             # Cluster stop-out tracking
             if reason == "STOP_LOSS":
                 ex_dt = _parse_iso_dt(t.get("exit_time"))
@@ -659,6 +682,12 @@ class AnalyticsService:
             "stop_type_buckets": _summarize_buckets(stop_map),
             "rvol_buckets": _summarize_buckets(rvol_map),
             "atr_ext_buckets": _summarize_buckets(atr_map),
+            "chartmill_attribution": {
+                "setup_rating_buckets": _summarize_buckets(cm_setup_map),
+                "tech_rating_buckets": _summarize_buckets(cm_tech_map),
+                "fundamental_rating_buckets": _summarize_buckets(cm_fund_map),
+                "sector_buckets": _summarize_buckets(cm_sector_map),
+            },
             "cluster_stop_events": cluster_events,
             "r_distribution": r_dist,
             "rolling_expectancy_10": round(sum(all_rs[-10:]) / 10.0, 4) if len(all_rs) >= 10 else None,
@@ -1020,10 +1049,35 @@ class AnalyticsService:
                     )
                 ).fetchall()
             ]
+            cm_rows = [
+                dict(r)
+                for r in await (
+                    await conn.execute("SELECT * FROM chartmill_universe ORDER BY date ASC;")
+                ).fetchall()
+            ]
+
+        # Build lookup for ChartMill technical/fundamental ratings by (date, symbol) with latest-symbol fallback
+        cm_by_date_sym: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        cm_latest_by_sym: Dict[str, Dict[str, Any]] = {}
+        for cm in cm_rows:
+            sym_u = str(cm["symbol"]).upper()
+            cm_by_date_sym[(str(cm["date"]), sym_u)] = cm
+            cm_latest_by_sym[sym_u] = cm
 
         # Separate today's trades and cumulative trades up to target_date
         def _t_date(tr: Dict[str, Any]) -> str:
             return str(tr.get("trade_date") or (tr.get("entry_time") or "")[:10])
+
+        for t in all_closed_trades:
+            td = _t_date(t)
+            sym_u = str(t.get("symbol") or "").upper()
+            cm = cm_by_date_sym.get((td, sym_u)) or cm_latest_by_sym.get(sym_u)
+            if cm:
+                t["cm_setup_rating"] = cm.get("setup_rating")
+                t["cm_tech_rating"] = cm.get("tech_rating")
+                t["cm_rs"] = cm.get("relative_strength")
+                t["cm_fundamental_rating"] = cm.get("fundamental_rating")
+                t["cm_sector"] = cm.get("sector")
 
         cumulative_trades = [t for t in all_closed_trades if _t_date(t) <= target_date]
         daily_trades = [t for t in cumulative_trades if _t_date(t) == target_date]

@@ -21,11 +21,13 @@ import logging
 from app.brokers.alpaca_adapter import AlpacaAdapter
 from app.config import ExecutionMode, settings
 from app.db import (
+    get_chartmill_profile,
     get_connection,
     get_daily_report,
     get_recent_signals,
     get_system_state,
     list_daily_report_dates,
+    save_chartmill_universe,
     save_daily_report,
     set_system_state,
 )
@@ -511,8 +513,10 @@ async def upload_chartmill_csv(
     content = (await file.read()).decode("utf-8", errors="ignore")
     result = chartmill_importer.parse_csv(content)
 
-    # Save latest basket string to DB
+    # Save latest basket string and per-symbol ChartMill technical/fundamental scorecards to DB
     await set_system_state("latest_chartmill_basket", result["basket_string"])
+    today_et = datetime.now(ZoneInfo(settings.MARKET_TIMEZONE)).strftime("%Y-%m-%d")
+    await save_chartmill_universe(today_et, result["basket"])
 
     logger.info(
         "ChartMill CSV processed: %d total, %d qualified, %d earnings excluded, %d in basket.",
@@ -767,6 +771,8 @@ async def get_symbol_chart_data(
                 or_high = float(s_row["or_high"])
                 or_low = float(s_row["or_low"])
 
+    cm_profile = await get_chartmill_profile(clean_sym, target_date_str)
+
     return JSONResponse(
         content={
             "symbol": clean_sym,
@@ -776,7 +782,11 @@ async def get_symbol_chart_data(
             "or_high": round(or_high, 2) if or_high is not None else None,
             "or_low": round(or_low, 2) if or_low is not None else None,
             "trade": trade_overlay,
+            "chartmill": cm_profile,
             "tradingview_url": f"https://www.tradingview.com/chart/?symbol={clean_sym}",
+            "chartmill_url": f"https://www.chartmill.com/stock/quote/{clean_sym}",
+            "chartmill_ta_url": f"https://www.chartmill.com/stock/quote/{clean_sym}/technical-analysis",
+            "chartmill_fa_url": f"https://www.chartmill.com/stock/quote/{clean_sym}/fundamental-analysis",
         }
     )
 

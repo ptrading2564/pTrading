@@ -76,10 +76,18 @@
           <span id="chart-modal-date" class="text-xs font-mono text-slate-400"></span>
           <span id="chart-modal-trade-badge" class="hidden text-xs font-mono px-2.5 py-0.5 rounded-full border"></span>
         </div>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <a id="chart-modal-cm-ta-link" href="https://www.chartmill.com" target="_blank" rel="noopener noreferrer"
+             class="px-2.5 py-1.5 rounded-lg bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/40 text-emerald-300 text-xs font-semibold transition">
+            ChartMill TA &nearr;
+          </a>
+          <a id="chart-modal-cm-fa-link" href="https://www.chartmill.com" target="_blank" rel="noopener noreferrer"
+             class="px-2.5 py-1.5 rounded-lg bg-indigo-600/15 hover:bg-indigo-600/25 border border-indigo-500/40 text-indigo-300 text-xs font-semibold transition">
+            ChartMill FA &nearr;
+          </a>
           <a id="chart-modal-tv-link" href="https://www.tradingview.com/chart/" target="_blank" rel="noopener noreferrer"
-             class="px-3 py-1.5 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-xs font-semibold transition">
-            Open in TradingView &nearr;
+             class="px-2.5 py-1.5 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-xs font-semibold transition">
+            TradingView &nearr;
           </a>
           <button type="button" onclick="closeSymbolChart()" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition">
             &times; Close
@@ -88,6 +96,7 @@
       </div>
 
       <div class="p-4">
+        <div id="chart-modal-cm-strip" class="hidden mb-3 px-3 py-2 rounded-lg bg-slate-800/80 border border-slate-700/70 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-slate-300"></div>
         <div id="chart-modal-legend" class="flex flex-wrap gap-3 text-[11px] font-mono text-slate-300 mb-2.5"></div>
         <div id="chart-modal-status" class="text-xs text-slate-400 py-16 text-center hidden"></div>
         <div id="chart-modal-canvas" class="w-full h-96"></div>
@@ -121,6 +130,9 @@
       const dateEl = document.getElementById("chart-modal-date");
       const badgeEl = document.getElementById("chart-modal-trade-badge");
       const tvLink = document.getElementById("chart-modal-tv-link");
+      const cmTaLink = document.getElementById("chart-modal-cm-ta-link");
+      const cmFaLink = document.getElementById("chart-modal-cm-fa-link");
+      const cmStrip = document.getElementById("chart-modal-cm-strip");
       const legendEl = document.getElementById("chart-modal-legend");
       const statusEl = document.getElementById("chart-modal-status");
       const canvasEl = document.getElementById("chart-modal-canvas");
@@ -128,8 +140,13 @@
       symEl.textContent = symbol;
       dateEl.textContent = dateStr ? `${dateStr} (5m ET)` : "5m ET";
       badgeEl.classList.add("hidden");
+      cmStrip.classList.add("hidden");
+      cmStrip.innerHTML = "";
       legendEl.innerHTML = "";
-      tvLink.href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}`;
+      const encSym = encodeURIComponent(symbol);
+      tvLink.href = `https://www.tradingview.com/chart/?symbol=${encSym}`;
+      cmTaLink.href = `https://www.chartmill.com/stock/quote/${encSym}/technical-analysis`;
+      cmFaLink.href = `https://www.chartmill.com/stock/quote/${encSym}/fundamental-analysis`;
 
       if (_ptChartInstance) {
         _ptChartInstance.remove();
@@ -151,6 +168,23 @@
 
         dateEl.textContent = `${data.date} (5m ET)`;
         tvLink.href = data.tradingview_url;
+        if (data.chartmill_ta_url) cmTaLink.href = data.chartmill_ta_url;
+        if (data.chartmill_fa_url) cmFaLink.href = data.chartmill_fa_url;
+
+        // Render ChartMill Scorecard strip if stored from morning CSV
+        const cm = data.chartmill;
+        if (cm) {
+          const items = [`<span class="text-slate-400 font-sans font-semibold uppercase text-[10px]">ChartMill (${cm.date}):</span>`];
+          if (cm.tech_rating != null) items.push(`<span>Tech <strong class="text-emerald-400">${Number(cm.tech_rating).toFixed(0)}/10</strong></span>`);
+          if (cm.setup_rating != null) items.push(`<span>Setup <strong class="text-sky-400">${Number(cm.setup_rating).toFixed(0)}/10</strong></span>`);
+          if (cm.relative_strength != null) items.push(`<span>RS <strong class="text-white">${Number(cm.relative_strength).toFixed(0)}</strong></span>`);
+          if (cm.fundamental_rating != null) items.push(`<span>Fund <strong class="text-indigo-300">${Number(cm.fundamental_rating).toFixed(0)}/10</strong></span>`);
+          if (cm.atr_pct != null) items.push(`<span>ATR% <strong class="text-slate-200">${Number(cm.atr_pct).toFixed(1)}%</strong></span>`);
+          if (cm.sector) items.push(`<span class="font-sans text-slate-300">Sector: <strong class="text-white">${cm.sector}</strong></span>`);
+          if (cm.next_earnings_date) items.push(`<span class="text-amber-300">Earnings: ${cm.next_earnings_date}</span>`);
+          cmStrip.innerHTML = items.join("");
+          cmStrip.classList.remove("hidden");
+        }
 
         if (!data.candles || data.candles.length === 0) {
           statusEl.textContent = `No 5m intraday bars returned by Alpaca for ${symbol} on ${data.date}. Use "Open in TradingView" to view live charts.`;

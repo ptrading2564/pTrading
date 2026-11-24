@@ -31,6 +31,13 @@ class ScreenerCandidate:
     next_earnings_date: Optional[str] = None
     earnings_filtered: bool = False
     rejection_reason: Optional[str] = None
+    fundamental_rating: Optional[float] = None
+    growth_rating: Optional[float] = None
+    health_rating: Optional[float] = None
+    profitability_rating: Optional[float] = None
+    valuation_rating: Optional[float] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
 
 
 class ChartMillImporter:
@@ -127,6 +134,13 @@ class ChartMillImporter:
         rs_col = next((header_map[k] for k in header_map if "relative_strength" in k or k == "rs"), None)
         name_col = next((header_map[k] for k in header_map if "name" in k or "company" in k), None)
         earnings_col = next((header_map[k] for k in header_map if "earning" in k), None)
+        fund_col = next((header_map[k] for k in header_map if "fund" in k), None)
+        growth_col = next((header_map[k] for k in header_map if "growth" in k), None)
+        health_col = next((header_map[k] for k in header_map if "health" in k), None)
+        profit_col = next((header_map[k] for k in header_map if "profit" in k), None)
+        val_col = next((header_map[k] for k in header_map if "val" in k and "avg" not in k), None)
+        sector_col = next((header_map[k] for k in header_map if k == "sector" or "sector" in k), None)
+        industry_col = next((header_map[k] for k in header_map if k == "industry" or "industry" in k), None)
 
         if not ticker_col:
             raise ValueError("CSV missing required 'Ticker' or 'Symbol' column.")
@@ -171,6 +185,13 @@ class ChartMillImporter:
                 next_earnings_date=str(earnings_raw) if earnings_raw else None,
                 earnings_filtered=is_risk,
                 rejection_reason=reason,
+                fundamental_rating=self._parse_float(row.get(fund_col)) if (fund_col and row.get(fund_col)) else None,
+                growth_rating=self._parse_float(row.get(growth_col)) if (growth_col and row.get(growth_col)) else None,
+                health_rating=self._parse_float(row.get(health_col)) if (health_col and row.get(health_col)) else None,
+                profitability_rating=self._parse_float(row.get(profit_col)) if (profit_col and row.get(profit_col)) else None,
+                valuation_rating=self._parse_float(row.get(val_col)) if (val_col and row.get(val_col)) else None,
+                sector=row.get(sector_col, "").strip() or None if sector_col else None,
+                industry=row.get(industry_col, "").strip() or None if industry_col else None,
             )
 
             if is_risk:

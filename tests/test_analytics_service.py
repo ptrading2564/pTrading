@@ -189,3 +189,44 @@ async def test_build_comprehensive_report_from_db():
     assert report["daily_trades_metrics"]["total_trades"] == 1
     assert report["cumulative_trades_metrics"]["total_trades"] == 2
     assert len(report["projections"]["horizons"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_chartmill_attribution_persisted_and_joined():
+    from app.db import save_chartmill_universe
+    from app.services.chartmill_importer import chartmill_importer
+
+    csv_text = (
+        "Ticker,Company Name,Price,ATR %,Setup Rating,Technical Rating,Relative Strength,Fundamental Rating,Sector\n"
+        "NVDA,NVIDIA,140.0,3.5,9,10,95,8,Technology\n"
+        "DG,Dollar General,140.0,2.8,7,7,76,3,Consumer Defensive\n"
+    )
+    parsed = chartmill_importer.parse_csv(csv_text)
+    assert parsed["basket"][0].fundamental_rating == 8.0
+    assert parsed["basket"][0].sector == "Technology"
+    await save_chartmill_universe("2026-11-24", parsed["basket"])
+
+    async with get_connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO daily_stats (date, starting_equity, current_equity, realized_pnl, trade_count)
+            VALUES ('2026-11-24', 100000.0, 100250.0, 250.0, 2);
+            """
+        )
+        await conn.execute(
+            """
+            INSERT INTO trades (client_order_id, symbol, qty, entry_price, stop_loss_price, initial_stop_price,
+                                initial_risk_dollars, take_profit_price, exit_price, pnl_dollars, pnl_r,
+                                exit_reason, trade_date, is_open)
+            VALUES ('cm1', 'NVDA', 100, 140.0, 137.5, 137.5, 250.0, 145.0, 145.0, 500.0, 2.0, 'TAKE_PROFIT', '2026-11-24', 0),
+                   ('cm2', 'DG', 100, 140.0, 137.5, 137.5, 250.0, 145.0, 137.5, -250.0, -1.0, 'STOP_LOSS', '2026-11-24', 0);
+            """
+        )
+        await conn.commit()
+
+    svc = AnalyticsService()
+    report = await svc.build_comprehensive_report(report_date="2026-11-24", num_simulations=200)
+    cm_attr = report["cumulative_trades_metrics"]["chartmill_attribution"]
+    assert cm_attr["setup_rating_buckets"]["Setup >= 8"]["avg_r"] == 2.0
+    assert cm_attr["fundamental_rating_buckets"]["Fund >= 5"]["avg_r"] == 2.0
+    assert "Technology" in cm_attr["sector_buckets"]

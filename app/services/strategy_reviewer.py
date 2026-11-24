@@ -274,6 +274,76 @@ class StrategyReviewer:
                 }
             )
 
+        # 8b. ChartMill Setup & Fundamental Rating Attribution
+        cm_attr = cum.get("chartmill_attribution", {})
+        setup_b = cm_attr.get("setup_rating_buckets", {})
+        s_hi = setup_b.get("Setup >= 8")
+        s_lo = setup_b.get("Setup < 8")
+        if s_hi and s_lo and int(s_hi["trades"]) >= 4 and int(s_lo["trades"]) >= 4:
+            if float(s_hi["avg_r"]) - float(s_lo["avg_r"]) >= 0.35:
+                findings.append(
+                    {
+                        "id": "CHARTMILL_SETUP_EDGE",
+                        "title": "Higher ChartMill Setup Ratings (>= 8) Outperforming",
+                        "severity": "WATCH",
+                        "category": "SCREENER_QUALITY",
+                        "sample_size": int(s_hi["trades"]) + int(s_lo["trades"]),
+                        "confidence": confidence,
+                        "evidence": (
+                            f"Setup >= 8 trades average {s_hi['avg_r']:+.2f}R ({s_hi['win_rate_pct']:.1f}% WR, n={s_hi['trades']}) "
+                            f"vs. Setup < 8 at {s_lo['avg_r']:+.2f}R (n={s_lo['trades']})."
+                        ),
+                        "recommendation": "Consider raising your ChartMill screener Setup Rating filter from >= 7 to >= 8.",
+                        "config_knob": "CHARTMILL_SETUP_FILTER",
+                    }
+                )
+
+        fund_b = cm_attr.get("fundamental_rating_buckets", {})
+        f_hi = fund_b.get("Fund >= 5")
+        f_lo = fund_b.get("Fund < 5")
+        if f_hi and f_lo and int(f_hi["trades"]) >= 4 and int(f_lo["trades"]) >= 4:
+            if float(f_hi["avg_r"]) - float(f_lo["avg_r"]) >= 0.35:
+                findings.append(
+                    {
+                        "id": "CHARTMILL_FUNDAMENTAL_EDGE",
+                        "title": "Fundamentally Stronger Stocks (Fund >= 5) Outperforming",
+                        "severity": "WATCH",
+                        "category": "SCREENER_QUALITY",
+                        "sample_size": int(f_hi["trades"]) + int(f_lo["trades"]),
+                        "confidence": confidence,
+                        "evidence": (
+                            f"Fund >= 5 trades average {f_hi['avg_r']:+.2f}R (n={f_hi['trades']}) "
+                            f"vs. Fund < 5 at {f_lo['avg_r']:+.2f}R (n={f_lo['trades']})."
+                        ),
+                        "recommendation": "Consider adding Fundamental Rating >= 5 to your ChartMill morning screener.",
+                        "config_knob": "CHARTMILL_FUNDAMENTAL_FILTER",
+                    }
+                )
+
+        sector_b = cm_attr.get("sector_buckets", {})
+        weak_sectors = [
+            (sec, st) for sec, st in sector_b.items()
+            if int(st["trades"]) >= 4 and float(st["avg_r"]) <= -0.35
+        ]
+        if weak_sectors:
+            sec_name, sec_st = min(weak_sectors, key=lambda x: x[1]["avg_r"])
+            findings.append(
+                {
+                    "id": "SECTOR_DRAG",
+                    "title": f"Sector Drag Detected in {sec_name}",
+                    "severity": "WATCH",
+                    "category": "SCREENER_QUALITY",
+                    "sample_size": int(sec_st["trades"]),
+                    "confidence": "MEANINGFUL" if int(sec_st["trades"]) >= 10 else "LOW",
+                    "evidence": (
+                        f"{sec_name} breakouts average {sec_st['avg_r']:+.2f}R "
+                        f"({sec_st['win_rate_pct']:.1f}% WR across {sec_st['trades']} trades, total {sec_st['total_r']:+.2f}R)."
+                    ),
+                    "recommendation": f"Review whether {sec_name} stocks are prone to false ORB breakouts in the current regime.",
+                    "config_knob": "CHARTMILL_SECTOR_FILTER",
+                }
+            )
+
         # 9. Healthy Baseline Info Note if no issues found
         if not findings:
             findings.append(
@@ -421,7 +491,7 @@ class StrategyReviewer:
         ]
         strat_hypotheses = [
             f for f in diagnostics
-            if f["category"] in ("EXIT_MANAGEMENT", "TIMING", "RISK_PLACEMENT")
+            if f["category"] in ("EXIT_MANAGEMENT", "TIMING", "RISK_PLACEMENT", "SCREENER_QUALITY")
         ]
 
         lines.extend(["", "## 5. Suggested Next Steps (Anti-Overfitting Gate)"])

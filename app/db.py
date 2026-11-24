@@ -145,6 +145,33 @@ async def init_db() -> None:
             """
         )
 
+        # ChartMill daily per-symbol technical & fundamental ratings table
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chartmill_universe (
+                date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                company_name TEXT,
+                price REAL,
+                atr_pct REAL,
+                setup_rating REAL,
+                tech_rating REAL,
+                relative_strength REAL,
+                composite_score REAL,
+                fundamental_rating REAL,
+                growth_rating REAL,
+                health_rating REAL,
+                profitability_rating REAL,
+                valuation_rating REAL,
+                sector TEXT,
+                industry TEXT,
+                next_earnings_date TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (date, symbol)
+            );
+            """
+        )
+
         # Idempotent migrations for existing databases
         await _ensure_columns(
             conn,
@@ -342,3 +369,83 @@ async def list_daily_report_dates(limit: int = 60) -> List[str]:
             "SELECT date FROM daily_reports ORDER BY date DESC LIMIT ?;", (limit,)
         )
         return [row["date"] for row in await cursor.fetchall()]
+
+
+async def save_chartmill_universe(trade_date: str, candidates: List[Any]) -> int:
+    """Persists per-symbol ChartMill technical & fundamental ratings for a trading day."""
+    if not candidates:
+        return 0
+    async with get_connection() as conn:
+        for c in candidates:
+            await conn.execute(
+                """
+                INSERT INTO chartmill_universe (
+                    date, symbol, company_name, price, atr_pct,
+                    setup_rating, tech_rating, relative_strength, composite_score,
+                    fundamental_rating, growth_rating, health_rating,
+                    profitability_rating, valuation_rating, sector, industry,
+                    next_earnings_date, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(date, symbol) DO UPDATE SET
+                    company_name = excluded.company_name,
+                    price = excluded.price,
+                    atr_pct = excluded.atr_pct,
+                    setup_rating = excluded.setup_rating,
+                    tech_rating = excluded.tech_rating,
+                    relative_strength = excluded.relative_strength,
+                    composite_score = excluded.composite_score,
+                    fundamental_rating = excluded.fundamental_rating,
+                    growth_rating = excluded.growth_rating,
+                    health_rating = excluded.health_rating,
+                    profitability_rating = excluded.profitability_rating,
+                    valuation_rating = excluded.valuation_rating,
+                    sector = excluded.sector,
+                    industry = excluded.industry,
+                    next_earnings_date = excluded.next_earnings_date,
+                    updated_at = CURRENT_TIMESTAMP;
+                """,
+                (
+                    trade_date,
+                    c.symbol,
+                    c.company_name,
+                    c.price,
+                    c.atr_pct,
+                    c.setup_rating,
+                    c.tech_rating,
+                    c.relative_strength,
+                    c.composite_score,
+                    c.fundamental_rating,
+                    c.growth_rating,
+                    c.health_rating,
+                    c.profitability_rating,
+                    c.valuation_rating,
+                    c.sector,
+                    c.industry,
+                    c.next_earnings_date,
+                ),
+            )
+        await conn.commit()
+    return len(candidates)
+
+
+async def get_chartmill_profile(symbol: str, trade_date: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Fetches stored ChartMill ratings for a symbol (exact date first, then latest available)."""
+    sym = symbol.upper().strip()
+    async with get_connection() as conn:
+        if trade_date:
+            row = await (
+                await conn.execute(
+                    "SELECT * FROM chartmill_universe WHERE symbol = ? AND date = ? LIMIT 1;",
+                    (sym, trade_date),
+                )
+            ).fetchone()
+            if row:
+                return dict(row)
+        row = await (
+            await conn.execute(
+                "SELECT * FROM chartmill_universe WHERE symbol = ? ORDER BY date DESC LIMIT 1;",
+                (sym,),
+            )
+        ).fetchone()
+        return dict(row) if row else None
