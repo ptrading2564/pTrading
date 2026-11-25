@@ -13,62 +13,66 @@
 
 <div class="space-y-6">
   <!-- Header & Controls -->
-  <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-700/60 pb-4">
-    <div>
-      <div class="flex flex-wrap items-center gap-2.5">
+  <div class="border-b border-slate-700/60 pb-4 space-y-3">
+    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+      <div>
         <h1 class="text-xl font-bold text-white">Daily Comprehensive Analysis & Strategy Review</h1>
-        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold font-mono border
-          {% if health.score >= 75 %}bg-emerald-500/15 text-emerald-300 border-emerald-500/40
-          {% elif health.score >= 55 %}bg-sky-500/15 text-sky-300 border-sky-500/40
-          {% elif health.score > 0 %}bg-amber-500/15 text-amber-300 border-amber-500/40
-          {% else %}bg-slate-700/60 text-slate-300 border-slate-600{% endif %}"
-          title="Edge {{ health.pillars.edge_expectancy.score if health.pillars.edge_expectancy else 0 }}/30 | RoR {{ health.pillars.risk_of_ruin.score if health.pillars.risk_of_ruin else 0 }}/25 | Stability {{ health.pillars.drawdown_stability.score if health.pillars.drawdown_stability else 0 }}/20 | Exec {{ health.pillars.execution_quality.score if health.pillars.execution_quality else 0 }}/15 | Sample {{ health.pillars.sample_confidence.score if health.pillars.sample_confidence else 0 }}/10">
-          Health: {{ health.score }}/100 ({{ health.grade }}) &bull; {{ health.status }}
-        </span>
-        <span class="text-[11px] px-2 py-0.5 rounded-full font-medium border
-          {% if proj.confidence == 'MEANINGFUL' %}bg-emerald-500/10 text-emerald-400 border-emerald-500/30
-          {% elif proj.confidence == 'LOW' %}bg-amber-500/10 text-amber-400 border-amber-500/30
-          {% else %}bg-slate-700/60 text-slate-300 border-slate-600{% endif %}">
-          Sample: {{ cum.total_trades }} trades ({{ proj.confidence }})
-        </span>
+        <p class="text-xs text-slate-400 mt-1">
+          Session: <span class="text-slate-200 font-mono">{{ selected_date }}</span>
+          &bull; Regime: <span class="text-sky-400 font-semibold">{{ roi.market_regime }}</span>
+          {% if roi.daily_spy_return_pct is not none %}
+          &bull; SPY: <span class="font-mono {% if roi.daily_spy_return_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(roi.daily_spy_return_pct) }}%</span>
+          {% endif %}
+          {% if roi.daily_alpha_vs_spy_pct is not none %}
+          &bull; Alpha: <span class="font-mono {% if roi.daily_alpha_vs_spy_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(roi.daily_alpha_vs_spy_pct) }}%</span>
+          {% endif %}
+        </p>
       </div>
-      <p class="text-xs text-slate-400 mt-1">
-        Session: <span class="text-slate-200 font-mono">{{ selected_date }}</span>
-        &bull; Regime: <span class="text-sky-400 font-semibold">{{ roi.market_regime }}</span>
-        {% if roi.daily_spy_return_pct is not none %}
-        &bull; SPY: <span class="font-mono {% if roi.daily_spy_return_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(roi.daily_spy_return_pct) }}%</span>
-        {% endif %}
-        {% if roi.daily_alpha_vs_spy_pct is not none %}
-        &bull; Alpha: <span class="font-mono {% if roi.daily_alpha_vs_spy_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(roi.daily_alpha_vs_spy_pct) }}%</span>
-        {% endif %}
-      </p>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <form method="get" action="/analytics" class="flex items-center">
+          <select name="date" onchange="this.form.submit()" class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-sky-500">
+            {% for d in available_dates %}
+            <option value="{{ d }}" {% if d == selected_date %}selected{% endif %}>{{ d }}</option>
+            {% endfor %}
+          </select>
+        </form>
+
+        <form method="post" action="/api/analytics/generate">
+          <input type="hidden" name="date" value="{{ selected_date }}">
+          <button type="submit" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition shadow whitespace-nowrap">
+            Refresh Report
+          </button>
+        </form>
+
+        <a href="/api/analytics/review.md?date={{ selected_date }}" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition whitespace-nowrap">
+          Review .md
+        </a>
+        <a href="/api/analytics/report?date={{ selected_date }}" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition whitespace-nowrap">
+          JSON
+        </a>
+        <a href="/api/analytics/export/csv" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition whitespace-nowrap">
+          CSV
+        </a>
+      </div>
     </div>
 
+    <!-- Dedicated Health & Sample Status Strip -->
     <div class="flex flex-wrap items-center gap-2">
-      <form method="get" action="/analytics" class="flex items-center gap-2">
-        <select name="date" onchange="this.form.submit()" class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-sky-500">
-          {% for d in available_dates %}
-          <option value="{{ d }}" {% if d == selected_date %}selected{% endif %}>{{ d }}</option>
-          {% endfor %}
-        </select>
-      </form>
-
-      <form method="post" action="/api/analytics/generate">
-        <input type="hidden" name="date" value="{{ selected_date }}">
-        <button type="submit" class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition shadow">
-          Refresh Report
-        </button>
-      </form>
-
-      <a href="/api/analytics/review.md?date={{ selected_date }}" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition">
-        Review .md
-      </a>
-      <a href="/api/analytics/report?date={{ selected_date }}" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition">
-        JSON
-      </a>
-      <a href="/api/analytics/export/csv" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition">
-        CSV
-      </a>
+      <span class="text-xs px-2.5 py-1 rounded-lg font-bold font-mono border
+        {% if health.score >= 75 %}bg-emerald-500/15 text-emerald-300 border-emerald-500/40
+        {% elif health.score >= 55 %}bg-sky-500/15 text-sky-300 border-sky-500/40
+        {% elif health.score > 0 %}bg-amber-500/15 text-amber-300 border-amber-500/40
+        {% else %}bg-slate-700/60 text-slate-300 border-slate-600{% endif %}"
+        title="Edge {{ health.pillars.edge_expectancy.score if health.pillars.edge_expectancy else 0 }}/30 | RoR {{ health.pillars.risk_of_ruin.score if health.pillars.risk_of_ruin else 0 }}/25 | Stability {{ health.pillars.drawdown_stability.score if health.pillars.drawdown_stability else 0 }}/20 | Exec {{ health.pillars.execution_quality.score if health.pillars.execution_quality else 0 }}/15 | Sample {{ health.pillars.sample_confidence.score if health.pillars.sample_confidence else 0 }}/10">
+        Strategy Health: {{ health.score }}/100 ({{ health.grade }}) &bull; {{ health.status }}
+      </span>
+      <span class="text-xs px-2.5 py-1 rounded-lg font-medium border
+        {% if proj.confidence == 'MEANINGFUL' %}bg-emerald-500/10 text-emerald-400 border-emerald-500/30
+        {% elif proj.confidence == 'LOW' %}bg-amber-500/10 text-amber-400 border-amber-500/30
+        {% else %}bg-slate-800 text-slate-300 border-slate-700{% endif %}">
+        Sample: {{ cum.total_trades }} trades ({{ proj.confidence }})
+      </span>
     </div>
   </div>
 

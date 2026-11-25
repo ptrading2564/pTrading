@@ -562,50 +562,80 @@ class StrategyReviewer:
             "x-goog-api-key": settings.GEMINI_API_KEY.strip(),
             "Content-Type": "application/json",
         }
-        # Try configured model (with 1 retry on 503), then automatic fallback models if experiencing high demand
-        candidate_models = [settings.GEMINI_MODEL]
-        for fb in ("gemini-3.8-flash-lite", "gemini-3.0-flash", "gemini-2.5-flash-lite"):
-            if fb not in candidate_models:
-                candidate_models.append(fb)
 
-        async with httpx.AsyncClient(timeout=35.0) as client:
-            for model_name in candidate_models:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Build ordered candidate list: configured model first, plus live-discovered flash models if needed
+            candidate_models = [settings.GEMINI_MODEL]
+
+            async def _discover_flash_models() -> List[str]:
+                try:
+                    m_res = await client.get(
+                        "https://generativelanguage.googleapis.com/v1beta/models",
+                        headers={"x-goog-api-key": settings.GEMINI_API_KEY.strip()},
+                    )
+                    if m_res.status_code != 200:
+                        return []
+                    found = []
+                    for m in m_res.json().get("models", []):
+                        methods = m.get("supportedGenerationMethods", [])
+                        raw_name = str(m.get("name", "")).replace("models/", "")
+                        if "generateContent" in methods and "flash" in raw_name.lower() and "tts" not in raw_name.lower() and "image" not in raw_name.lower():
+                            found.append(raw_name)
+                    # Prefer newest / lite flash variants
+                    found.sort(reverse=True)
+                    return found[:4]
+                except Exception:
+                    return []
+
+            tried = set()
+            discovered_added = False
+            idx = 0
+            while idx < len(candidate_models):
+                model_name = candidate_models[idx]
+                idx += 1
+                if model_name in tried:
+                    continue
+                tried.add(model_name)
+
                 url = (
                     f"https://generativelanguage.googleapis.com/v1beta/models/"
                     f"{model_name}:generateContent"
                 )
-                for attempt in range(2):
-                    try:
-                        res = await client.post(
-                            url,
-                            headers=headers,
-                            json={"contents": [{"parts": [{"text": prompt}]}]},
+                try:
+                    res = await client.post(
+                        url,
+                        headers=headers,
+                        json={"contents": [{"parts": [{"text": prompt}]}]},
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        text = (
+                            data.get("candidates", [{}])[0]
+                            .get("content", {})
+                            .get("parts", [{}])[0]
+                            .get("text", "")
+                            .strip()
                         )
-                        if res.status_code == 200:
-                            data = res.json()
-                            text = (
-                                data.get("candidates", [{}])[0]
-                                .get("content", {})
-                                .get("parts", [{}])[0]
-                                .get("text", "")
-                                .strip()
-                            )
-                            if text:
-                                return text, f"gemini ({model_name})", diagnostics
-                        if res.status_code in (429, 503) and attempt == 0:
-                            logger.warning("Gemini model %s returned %d; retrying in 1.5s...", model_name, res.status_code)
-                            await asyncio.sleep(1.5)
-                            continue
-                        logger.warning(
-                            "Gemini model %s returned status %d (%s); trying next fallback.",
-                            model_name,
-                            res.status_code,
-                            res.text[:200],
-                        )
-                        break
-                    except Exception as e:
-                        logger.warning("Gemini call for %s failed (%s); trying next fallback.", model_name, e)
-                        break
+                        if text:
+                            return text, f"gemini ({model_name})", diagnostics
+                    logger.warning(
+                        "Gemini model %s returned status %d (%s).",
+                        model_name,
+                        res.status_code,
+                        res.text[:200],
+                    )
+                    if not discovered_added:
+                        discovered_added = True
+                        for dm in await _discover_flash_models():
+                            if dm not in tried and dm not in candidate_models:
+                                candidate_models.append(dm)
+                except Exception as e:
+                    logger.warning("Gemini call for %s failed (%s).", model_name, e)
+                    if not discovered_added:
+                        discovered_added = True
+                        for dm in await _discover_flash_models():
+                            if dm not in tried and dm not in candidate_models:
+                                candidate_models.append(dm)
 
         return deterministic_md, "deterministic", diagnostics
 

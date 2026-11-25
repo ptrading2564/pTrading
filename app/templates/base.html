@@ -33,15 +33,15 @@
         <div class="w-8 h-8 rounded-lg bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center font-bold text-white shadow-lg shadow-sky-500/20">
           pT
         </div>
-        <div>
+        <div class="flex items-center gap-2">
           <span class="text-lg font-bold tracking-tight text-white">pTrading</span>
-          <span class="text-xs px-2 py-0.5 ml-1.5 rounded bg-sky-500/10 text-sky-400 font-medium border border-sky-500/20">US Momentum Breakouts</span>
+          <span class="hidden lg:inline-block text-xs px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 font-medium border border-sky-500/20 whitespace-nowrap">US Momentum Breakouts</span>
         </div>
       </div>
 
       <div class="flex items-center gap-4">
         <!-- Market Status Badge -->
-        <div id="market-status-badge" class="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs">
+        <div id="market-status-badge" class="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs whitespace-nowrap">
           <span id="header-market-dot" class="w-2 h-2 rounded-full {% if is_market_open %}bg-emerald-400 animate-pulse{% else %}bg-slate-500{% endif %}"></span>
           <span id="header-market-text" class="text-slate-300 font-medium">{% if is_market_open %}MARKET OPEN{% else %}MARKET CLOSED{% endif %}</span>
           <span class="text-slate-500">|</span>
@@ -252,10 +252,11 @@
             legendParts.push(`<span class="text-rose-300">Stop: $${Number(stopP).toFixed(2)}</span>`);
           }
           if (tr.take_profit_price != null) {
-            candleSeries.createPriceLine({ price: tr.take_profit_price, color: "#2dd4bf", lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: "TP +2R" });
+            const tpIsExit = tr.exit_price != null && Math.abs(Number(tr.exit_price) - Number(tr.take_profit_price)) <= 0.02;
+            candleSeries.createPriceLine({ price: tr.take_profit_price, color: "#2dd4bf", lineWidth: tpIsExit ? 2 : 1, lineStyle: 3, axisLabelVisible: true, title: tpIsExit ? "TP +2R (EXIT)" : "TP +2R" });
             legendParts.push(`<span class="text-teal-300">TP: $${Number(tr.take_profit_price).toFixed(2)}</span>`);
           }
-          if (tr.exit_price != null) {
+          if (tr.exit_price != null && !(tr.take_profit_price != null && Math.abs(Number(tr.exit_price) - Number(tr.take_profit_price)) <= 0.02)) {
             candleSeries.createPriceLine({ price: tr.exit_price, color: "#c084fc", lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: tr.exit_reason || "Exit" });
             legendParts.push(`<span class="text-purple-300">Exit: $${Number(tr.exit_price).toFixed(2)}</span>`);
           }
