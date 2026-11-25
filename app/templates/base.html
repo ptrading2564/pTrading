@@ -48,12 +48,73 @@
           <span id="header-clock-et" class="text-slate-400 font-mono">{{ current_time_et }} ET</span>
         </div>
 
-        <nav class="flex items-center gap-2 text-sm">
-          <a href="/" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-200 transition">Dashboard</a>
-          <a href="/analytics" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition">Analytics</a>
-          <a href="/health" target="_blank" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition">Health</a>
-          <a href="/logout" class="px-3 py-1.5 rounded-md hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 transition">Logout</a>
+        <nav class="flex items-center gap-1.5 text-sm">
+          <a href="/" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-200 transition font-medium">Dashboard</a>
+          <a href="/analytics" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition font-medium">Analytics</a>
+          <a href="/health" target="_blank" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition font-medium">Health</a>
         </nav>
+
+        <!-- User Avatar & Profile Dropdown Menu -->
+        <div class="relative ml-2">
+          <button
+            id="user-menu-btn"
+            type="button"
+            onclick="toggleUserMenu()"
+            class="flex items-center gap-2 py-1 px-1.5 sm:px-2 rounded-full hover:bg-slate-700/80 transition focus:outline-none border border-slate-700/60 bg-slate-800/60"
+            aria-expanded="false"
+            aria-haspopup="true"
+          >
+            {% if user and user.avatar %}
+            <img src="{{ user.avatar }}" alt="Avatar" class="w-7 h-7 rounded-full object-cover ring-2 ring-sky-500/40">
+            {% else %}
+            <div class="w-7 h-7 rounded-full bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center font-bold text-white text-[11px] shadow ring-2 ring-sky-500/30">
+              {{ (user.name[:2] if user and user.name else 'PT') | upper }}
+            </div>
+            {% endif %}
+            <span class="hidden md:inline-block text-xs font-medium text-slate-200 max-w-[130px] truncate">
+              {{ user.name if user and user.name else (username or 'pTrading') }}
+            </span>
+            <svg class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+
+          <!-- Dropdown Card -->
+          <div
+            id="user-menu-dropdown"
+            class="hidden absolute right-0 mt-2 w-64 rounded-xl bg-slate-800 border border-slate-700 shadow-2xl py-2 z-50 transform origin-top-right transition-all"
+          >
+            <!-- User Info Header -->
+            <div class="px-4 py-3 border-b border-slate-700/80">
+              <p class="text-xs font-semibold text-white truncate">{{ user.name if user and user.name else 'Administrator' }}</p>
+              <p class="text-[11px] font-mono text-slate-400 truncate">{{ user.user if user and user.user else (username or 'p.trading2564@gmail.com') }}</p>
+              <div class="mt-2 flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                <span class="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Authorized Admin</span>
+              </div>
+            </div>
+
+            <!-- Menu Items -->
+            <div class="py-1">
+              <button
+                type="button"
+                onclick="openPasswordModal()"
+                class="w-full text-left px-4 py-2.5 text-xs text-slate-300 hover:bg-slate-700/80 hover:text-white flex items-center gap-2.5 transition"
+              >
+                <svg class="w-4 h-4 text-sky-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                <span>Change Fallback Password</span>
+              </button>
+            </div>
+
+            <div class="border-t border-slate-700/80 pt-1">
+              <a
+                href="/logout"
+                class="w-full text-left px-4 py-2.5 text-xs text-rose-300 hover:bg-rose-500/15 flex items-center gap-2.5 transition"
+              >
+                <svg class="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+                <span>Sign Out</span>
+              </a>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </header>
@@ -276,6 +337,177 @@
         statusEl.textContent = `Could not load chart data (${err.message}). Click "Open in TradingView" instead.`;
       }
     }
+
+    // --- User Avatar Menu & In-App Password Manager ---
+    function toggleUserMenu() {
+      const dropdown = document.getElementById("user-menu-dropdown");
+      if (!dropdown) return;
+      dropdown.classList.toggle("hidden");
+    }
+
+    document.addEventListener("click", function(e) {
+      const menuBtn = document.getElementById("user-menu-btn");
+      const dropdown = document.getElementById("user-menu-dropdown");
+      if (dropdown && !dropdown.classList.contains("hidden")) {
+        if (menuBtn && !menuBtn.contains(e.target) && !dropdown.contains(e.target)) {
+          dropdown.classList.add("hidden");
+        }
+      }
+    });
+
+    function openPasswordModal() {
+      const dropdown = document.getElementById("user-menu-dropdown");
+      if (dropdown) dropdown.classList.add("hidden");
+      const modal = document.getElementById("password-modal");
+      if (modal) {
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+        const fb = document.getElementById("password-feedback");
+        if (fb) { fb.className = "hidden"; fb.textContent = ""; }
+        const form = document.getElementById("change-password-form");
+        if (form) form.reset();
+      }
+    }
+
+    function closePasswordModal() {
+      const modal = document.getElementById("password-modal");
+      if (modal) {
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
+      }
+    }
+
+    async function submitPasswordChange(e) {
+      e.preventDefault();
+      const btn = document.getElementById("save-password-btn");
+      const fb = document.getElementById("password-feedback");
+      const form = document.getElementById("change-password-form");
+      if (!form || !fb || !btn) return;
+
+      const cur = form.current_password.value;
+      const newP = form.new_password.value;
+      const confP = form.confirm_password.value;
+
+      if (newP !== confP) {
+        fb.className = "px-3.5 py-2.5 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-medium";
+        fb.textContent = "New passwords do not match.";
+        return;
+      }
+      if (newP.length < 8) {
+        fb.className = "px-3.5 py-2.5 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-medium";
+        fb.textContent = "New password must be at least 8 characters long.";
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = "Saving...";
+
+      try {
+        const formData = new FormData(form);
+        const res = await fetch("/api/auth/change-password", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+        if (res.ok) {
+          fb.className = "px-3.5 py-2.5 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-xs font-medium";
+          fb.textContent = data.message || "Password updated successfully!";
+          form.reset();
+          setTimeout(() => {
+            closePasswordModal();
+          }, 2000);
+        } else {
+          fb.className = "px-3.5 py-2.5 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-medium";
+          fb.textContent = data.message || "Failed to change password.";
+        }
+      } catch (err) {
+        fb.className = "px-3.5 py-2.5 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-medium";
+        fb.textContent = `Network error: ${err.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Update Password";
+      }
+    }
   </script>
+
+  <!-- Change Fallback Password Modal -->
+  <div id="password-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4" onclick="if(event.target===this) closePasswordModal()">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+      <div class="px-6 py-4 border-b border-slate-700 flex items-center justify-between bg-slate-800/80">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center border border-sky-400/30">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+          </div>
+          <h3 class="text-sm font-bold text-white">Change Fallback Password</h3>
+        </div>
+        <button type="button" onclick="closePasswordModal()" class="text-slate-400 hover:text-white transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <form id="change-password-form" onsubmit="submitPasswordChange(event)" class="p-6 space-y-4">
+        <p class="text-xs text-slate-400 leading-relaxed">
+          Update the password for your fallback username (<span class="text-sky-400 font-mono">p.trading2564@gmail.com</span>). This persists in SQLite and can be used anytime without Google OAuth.
+        </p>
+
+        <div id="password-feedback" class="hidden px-3.5 py-2.5 rounded-lg text-xs font-medium"></div>
+
+        <div>
+          <label for="current_password" class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Current Password</label>
+          <input
+            id="current_password"
+            name="current_password"
+            type="password"
+            required
+            class="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+            placeholder="••••••••••••"
+          >
+        </div>
+
+        <div>
+          <label for="new_password" class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">New Password (min 8 chars)</label>
+          <input
+            id="new_password"
+            name="new_password"
+            type="password"
+            required
+            minlength="8"
+            class="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+            placeholder="••••••••••••"
+          >
+        </div>
+
+        <div>
+          <label for="confirm_password" class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Confirm New Password</label>
+          <input
+            id="confirm_password"
+            name="confirm_password"
+            type="password"
+            required
+            minlength="8"
+            class="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+            placeholder="••••••••••••"
+          >
+        </div>
+
+        <div class="pt-2 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onclick="closePasswordModal()"
+            class="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition border border-slate-700"
+          >
+            Cancel
+          </button>
+          <button
+            id="save-password-btn"
+            type="submit"
+            class="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition shadow-md shadow-sky-600/30"
+          >
+            Update Password
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
 </body>
 </html>

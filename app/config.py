@@ -40,9 +40,23 @@ class Settings(BaseSettings):
     }
 
     # Dashboard Authentication
-    DASHBOARD_USERNAME: str = "admin"
+    DASHBOARD_USERNAME: str = "p.trading2564@gmail.com"
     DASHBOARD_PASSWORD: str = "adminpassword123"
     SESSION_SECRET_KEY: str = "secret-key-32-bytes-minimum-trading-session"
+
+    # Google OAuth 2.0 Settings
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    ALLOWED_GOOGLE_EMAILS: str = "p.trading2564@gmail.com"
+    GOOGLE_OAUTH_ENABLED: bool = True
+
+    @property
+    def allowed_google_emails_set(self) -> Set[str]:
+        return {
+            email.strip().lower()
+            for email in self.ALLOWED_GOOGLE_EMAILS.split(",")
+            if email.strip()
+        }
 
     # Alpaca API Credentials
     ALPACA_API_KEY: str = ""

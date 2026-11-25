@@ -1,5 +1,6 @@
 """Dashboard router: Web UI, Authentication, Mode Switcher, Kill-Switch, and ChartMill CSV Upload."""
 
+import base64
 import csv
 import hashlib
 import hmac
@@ -9,9 +10,10 @@ import secrets
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
+import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -46,6 +48,11 @@ security = HTTPBasic(auto_error=False)
 
 SESSION_COOKIE_NAME = "ptrading_session"
 SESSION_MAX_AGE_SECONDS = 7 * 24 * 3600  # 7 days
+OAUTH_STATE_COOKIE = "ptrading_oauth_state"
+
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 templates_path = Path(__file__).parent.parent / "templates"
 templates = Jinja2Templates(directory=str(templates_path))
@@ -54,22 +61,109 @@ broker = AlpacaAdapter()
 risk_manager = RiskManager(broker)
 
 
-def _create_session_token(username: str) -> str:
+def _is_valid_username(username: str) -> bool:
+    """Validates whether a username matches default DASHBOARD_USERNAME or allowed Google emails."""
+    if not username:
+        return False
+    u = username.strip().lower()
+    return secrets.compare_digest(u, settings.DASHBOARD_USERNAME.lower()) or (u in settings.allowed_google_emails_set)
+
+
+def _hash_password(plain_password: str, salt: Optional[str] = None) -> str:
+    """Creates a PBKDF2-HMAC-SHA256 salted hash of a password."""
+    if not salt:
+        salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", plain_password.encode("utf-8"), salt.encode("utf-8"), 100_000)
+    return f"pbkdf2_sha256${salt}${h.hex()}"
+
+
+def _verify_password_hash(plain_password: str, stored_hash: str) -> bool:
+    """Verifies a plain password against a PBKDF2-HMAC-SHA256 stored hash."""
+    try:
+        parts = stored_hash.split("$")
+        if len(parts) == 3 and parts[0] == "pbkdf2_sha256":
+            salt = parts[1]
+            expected_hash = parts[2]
+            calculated = hashlib.pbkdf2_hmac("sha256", plain_password.encode("utf-8"), salt.encode("utf-8"), 100_000).hex()
+            return secrets.compare_digest(calculated, expected_hash)
+    except Exception as e:
+        logger.warning("Error verifying password hash: %s", e)
+    return False
+
+
+async def _check_dashboard_password(password_to_check: str) -> bool:
+    """Checks password against custom SQLite hash override if set, else falls back to .env."""
+    try:
+        custom_hash = await get_system_state("dashboard_password_hash")
+        if custom_hash:
+            return _verify_password_hash(password_to_check, custom_hash)
+    except Exception as e:
+        logger.warning("Could not check custom password hash from system_state: %s", e)
+    return secrets.compare_digest(password_to_check, settings.DASHBOARD_PASSWORD)
+
+
+def _create_session_token(user_data: Any) -> str:
     """Creates an HMAC-SHA256 signed session token valid for 7 days."""
     exp = int(time.time()) + SESSION_MAX_AGE_SECONDS
-    payload = f"{username}:{exp}"
+    if isinstance(user_data, dict):
+        payload_dict = {
+            "user": user_data.get("user", settings.DASHBOARD_USERNAME),
+            "name": user_data.get("name", user_data.get("user", "")),
+            "avatar": user_data.get("avatar", ""),
+            "exp": exp,
+        }
+    else:
+        payload_dict = {
+            "user": str(user_data),
+            "name": str(user_data).split("@")[0].capitalize(),
+            "avatar": "",
+            "exp": exp,
+        }
+    payload_json = json.dumps(payload_dict, separators=(",", ":"))
+    b64_payload = base64.urlsafe_b64encode(payload_json.encode("utf-8")).decode("utf-8")
     sig = hmac.new(
         settings.SESSION_SECRET_KEY.encode("utf-8"),
-        payload.encode("utf-8"),
+        b64_payload.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    return f"{payload}:{sig}"
+    return f"v2.{b64_payload}.{sig}"
 
 
-def _verify_session_token(token: Optional[str]) -> Optional[str]:
-    """Verifies an HMAC-SHA256 signed session cookie token and returns the username if valid."""
+def _verify_session_token(token: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Verifies HMAC-SHA256 signed session cookie token and returns user dict if valid."""
     if not token:
         return None
+
+    if token.startswith("v2."):
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        _, b64_payload, sig = parts
+        expected_sig = hmac.new(
+            settings.SESSION_SECRET_KEY.encode("utf-8"),
+            b64_payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        if not secrets.compare_digest(sig, expected_sig):
+            return None
+        try:
+            payload_json = base64.urlsafe_b64decode(b64_payload.encode("utf-8")).decode("utf-8")
+            data = json.loads(payload_json)
+            exp = int(data.get("exp", 0))
+            if exp < int(time.time()):
+                return None
+            username = data.get("user", "")
+            if not _is_valid_username(username):
+                return None
+            return {
+                "user": username,
+                "name": data.get("name") or username.split("@")[0].capitalize(),
+                "avatar": data.get("avatar", ""),
+            }
+        except Exception:
+            return None
+
+    # Legacy token fallback: "username:exp:sig"
     parts = token.split(":")
     if len(parts) != 3:
         return None
@@ -84,26 +178,37 @@ def _verify_session_token(token: Optional[str]) -> Optional[str]:
         f"{username}:{exp_str}".encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    if secrets.compare_digest(sig, expected_sig) and secrets.compare_digest(username, settings.DASHBOARD_USERNAME):
-        return username
+    if secrets.compare_digest(sig, expected_sig) and _is_valid_username(username):
+        return {
+            "user": username,
+            "name": username.split("@")[0].capitalize(),
+            "avatar": "",
+        }
     return None
 
 
-def authenticate_user(
+async def authenticate_user(
     request: Request,
     credentials: Optional[HTTPBasicCredentials] = Depends(security),
 ) -> str:
     """Authenticates via signed session cookie (HTML login) OR HTTP Basic Auth (API/scripts)."""
     # 1. Check signed session cookie first
-    cookie_user = _verify_session_token(request.cookies.get(SESSION_COOKIE_NAME))
-    if cookie_user:
-        return cookie_user
+    session_data = _verify_session_token(request.cookies.get(SESSION_COOKIE_NAME))
+    if session_data:
+        request.state.user = session_data
+        return session_data["user"]
 
     # 2. Check HTTP Basic Auth credentials
     if credentials is not None:
-        correct_username = secrets.compare_digest(credentials.username, settings.DASHBOARD_USERNAME)
-        correct_password = secrets.compare_digest(credentials.password, settings.DASHBOARD_PASSWORD)
-        if correct_username and correct_password:
+        valid_user = _is_valid_username(credentials.username)
+        valid_pass = await _check_dashboard_password(credentials.password)
+        if valid_user and valid_pass:
+            user_dict = {
+                "user": credentials.username,
+                "name": credentials.username.split("@")[0].capitalize(),
+                "avatar": "",
+            }
+            request.state.user = user_dict
             return credentials.username
 
     # 3. Redirect interactive browser HTML requests to /login; return 401 for API requests
@@ -126,14 +231,33 @@ def authenticate_user(
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, next: str = "/"):
-    """Renders the clean HTML sign-in page."""
+async def login_page(
+    request: Request,
+    next: str = "/",
+    error: Optional[str] = None,
+):
+    """Renders the hybrid HTML sign-in page."""
     if _verify_session_token(request.cookies.get(SESSION_COOKIE_NAME)):
         return RedirectResponse(url=next if next.startswith("/") else "/", status_code=status.HTTP_303_SEE_OTHER)
+
+    error_message = None
+    if error == "unauthorized_email":
+        error_message = "Your Google account is not authorized to access pTrading. Only registered administrator accounts are allowed."
+    elif error == "state_mismatch":
+        error_message = "Sign-in session expired or security verification failed. Please try again."
+    elif error == "oauth_failed":
+        error_message = "Google authentication failed or was cancelled. Please try again or use your fallback password."
+    elif error:
+        error_message = error
+
     return templates.TemplateResponse(
         request=request,
         name="login.html",
-        context={"error": None, "next_url": next if next.startswith("/") else "/"},
+        context={
+            "error": error_message,
+            "next_url": next if next.startswith("/") else "/",
+            "google_oauth_enabled": bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_OAUTH_ENABLED),
+        },
     )
 
 
@@ -145,15 +269,19 @@ async def login_submit(
     next: str = Form("/"),
 ):
     """Validates credentials and sets an HttpOnly signed session cookie."""
-    correct_username = secrets.compare_digest(username.strip(), settings.DASHBOARD_USERNAME)
-    correct_password = secrets.compare_digest(password, settings.DASHBOARD_PASSWORD)
     safe_next = next if next.startswith("/") and not next.startswith("//") else "/"
+    valid_user = _is_valid_username(username)
+    valid_pass = await _check_dashboard_password(password)
 
-    if not (correct_username and correct_password):
+    if not (valid_user and valid_pass):
         return templates.TemplateResponse(
             request=request,
             name="login.html",
-            context={"error": "Invalid username or password.", "next_url": safe_next},
+            context={
+                "error": "Invalid username or password.",
+                "next_url": safe_next,
+                "google_oauth_enabled": bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_OAUTH_ENABLED),
+            },
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
@@ -164,9 +292,177 @@ async def login_submit(
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=(request.url.scheme == "https"),
+        secure=(request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"),
     )
     return response
+
+
+@router.get("/auth/google/login")
+async def google_login(request: Request, next: str = "/"):
+    """Initiates Google OAuth 2.0 OpenID Connect authorization code flow."""
+    if not settings.GOOGLE_CLIENT_ID or not settings.GOOGLE_OAUTH_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Google OAuth is not configured or disabled.",
+        )
+    safe_next = next if next.startswith("/") and not next.startswith("//") else "/"
+    raw_state = secrets.token_urlsafe(32)
+    state_payload = f"{raw_state}:{safe_next}"
+    sig = hmac.new(settings.SESSION_SECRET_KEY.encode(), state_payload.encode(), hashlib.sha256).hexdigest()
+    signed_state = f"{state_payload}:{sig}"
+
+    redirect_uri = str(request.url_for("google_callback"))
+    if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https":
+        redirect_uri = redirect_uri.replace("http://", "https://", 1)
+
+    params = {
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "redirect_uri": redirect_uri,
+        "state": raw_state,
+        "prompt": "select_account",
+    }
+    auth_url = f"{GOOGLE_AUTH_URL}?{httpx.QueryParams(params)}"
+    response = RedirectResponse(url=auth_url, status_code=status.HTTP_303_SEE_OTHER)
+    response.set_cookie(
+        key=OAUTH_STATE_COOKIE,
+        value=signed_state,
+        max_age=600,
+        httponly=True,
+        samesite="lax",
+        secure=(request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"),
+    )
+    return response
+
+
+@router.get("/auth/google/callback")
+async def google_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    """Handles Google OAuth callback, verifies allowlist, and sets session cookie."""
+    if error or not code or not state:
+        logger.warning("Google OAuth error or missing code/state: error=%s", error)
+        return RedirectResponse(url="/login?error=oauth_failed", status_code=status.HTTP_303_SEE_OTHER)
+
+    cookie_state = request.cookies.get(OAUTH_STATE_COOKIE)
+    if not cookie_state or cookie_state.count(":") < 2:
+        logger.warning("Google OAuth callback missing or invalid state cookie")
+        return RedirectResponse(url="/login?error=state_mismatch", status_code=status.HTTP_303_SEE_OTHER)
+
+    parts = cookie_state.rsplit(":", 1)
+    state_payload, sig = parts[0], parts[1]
+    expected_sig = hmac.new(settings.SESSION_SECRET_KEY.encode(), state_payload.encode(), hashlib.sha256).hexdigest()
+    if not secrets.compare_digest(sig, expected_sig):
+        logger.warning("Google OAuth callback state signature verification failed")
+        return RedirectResponse(url="/login?error=state_mismatch", status_code=status.HTTP_303_SEE_OTHER)
+
+    raw_cookie_state, next_path = state_payload.split(":", 1)
+    if not secrets.compare_digest(raw_cookie_state, state):
+        logger.warning("Google OAuth callback state mismatch: param=%s vs cookie=%s", state, raw_cookie_state)
+        return RedirectResponse(url="/login?error=state_mismatch", status_code=status.HTTP_303_SEE_OTHER)
+
+    redirect_uri = str(request.url_for("google_callback"))
+    if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https":
+        redirect_uri = redirect_uri.replace("http://", "https://", 1)
+
+    token_data = {
+        "code": code,
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "client_secret": settings.GOOGLE_CLIENT_SECRET,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            token_res = await client.post(GOOGLE_TOKEN_URL, data=token_data)
+            if token_res.status_code != 200:
+                logger.error("Failed to exchange code for token: %s", token_res.text)
+                return RedirectResponse(url="/login?error=oauth_failed", status_code=status.HTTP_303_SEE_OTHER)
+
+            tokens = token_res.json()
+            access_token = tokens.get("access_token")
+            if not access_token:
+                return RedirectResponse(url="/login?error=oauth_failed", status_code=status.HTTP_303_SEE_OTHER)
+
+            userinfo_res = await client.get(
+                GOOGLE_USERINFO_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if userinfo_res.status_code != 200:
+                logger.error("Failed to fetch Google userinfo: %s", userinfo_res.text)
+                return RedirectResponse(url="/login?error=oauth_failed", status_code=status.HTTP_303_SEE_OTHER)
+
+            userinfo = userinfo_res.json()
+    except Exception as e:
+        logger.error("Exception during Google OAuth callback: %s", e)
+        return RedirectResponse(url="/login?error=oauth_failed", status_code=status.HTTP_303_SEE_OTHER)
+
+    email = (userinfo.get("email") or "").strip().lower()
+    name = userinfo.get("name") or email.split("@")[0]
+    picture = userinfo.get("picture") or ""
+
+    if email not in settings.allowed_google_emails_set:
+        logger.warning("Unauthorized Google OAuth login attempt: %s (allowed: %s)", email, settings.allowed_google_emails_set)
+        return RedirectResponse(url="/login?error=unauthorized_email", status_code=status.HTTP_303_SEE_OTHER)
+
+    session_payload = {
+        "user": email,
+        "name": name,
+        "avatar": picture,
+    }
+    token = _create_session_token(session_payload)
+    dest = next_path if next_path.startswith("/") and not next_path.startswith("//") else "/"
+    response = RedirectResponse(url=dest, status_code=status.HTTP_303_SEE_OTHER)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        samesite="lax",
+        secure=(request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"),
+    )
+    response.delete_cookie(OAUTH_STATE_COOKIE)
+    return response
+
+
+@router.post("/api/auth/change-password")
+async def change_password(
+    request: Request,
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+    username: str = Depends(authenticate_user),
+):
+    """Allows changing the fallback password directly from the Web UI."""
+    if new_password != confirm_password:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"status": "error", "message": "New passwords do not match."},
+        )
+    if len(new_password) < 8:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"status": "error", "message": "New password must be at least 8 characters long."},
+        )
+
+    valid_current = await _check_dashboard_password(current_password)
+    if not valid_current:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"status": "error", "message": "Current password is incorrect."},
+        )
+
+    new_hash = _hash_password(new_password)
+    await set_system_state("dashboard_password_hash", new_hash)
+    logger.info("Dashboard password successfully updated for user: %s", username)
+
+    return JSONResponse(
+        content={"status": "success", "message": "Password changed successfully! Your fallback password has been updated."},
+    )
 
 
 @router.get("/logout")
@@ -255,10 +551,17 @@ async def dashboard_home(
         logger.warning("Error fetching scanner status info: %s", e)
         scanner_info = {"status": "UNAVAILABLE", "market_health": {}}
 
+    user_info = getattr(request.state, "user", None) or {
+        "user": username,
+        "name": username.split("@")[0].capitalize(),
+        "avatar": "",
+    }
+
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
+            "user": user_info,
             "username": username,
             "equity": equity,
             "starting_equity": starting_equity,
@@ -349,10 +652,17 @@ async def analytics_page(
 
     bundle = await _load_or_build_report(report_date=selected_date, force_refresh=False)
 
+    user_info = getattr(request.state, "user", None) or {
+        "user": username,
+        "name": username.split("@")[0].capitalize(),
+        "avatar": "",
+    }
+
     return templates.TemplateResponse(
         request=request,
         name="analytics.html",
         context={
+            "user": user_info,
             "username": username,
             "selected_date": selected_date,
             "available_dates": available_dates,
