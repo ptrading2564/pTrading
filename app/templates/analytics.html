@@ -301,6 +301,80 @@
   </div>
   {% endif %}
 
+  <!-- Missed / Rejected Signals Counterfactual Audit -->
+  {% set missed = report.missed_signals_audit %}
+  {% if missed and missed.total_rejected > 0 %}
+  <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
+    <div class="p-4 border-b border-slate-700/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+      <div>
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">Missed / Rejected Signals Counterfactual Audit ({{ selected_date }})</h2>
+        <p class="text-[11px] text-slate-400 mt-0.5">Simulated 5m Alpaca bar outcomes using exact strategy rules (+1R BE step, +2R TP, 15:55 ET flatten).</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 text-xs font-mono">
+        <span class="px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700 text-slate-300">
+          {{ missed.sim_wins }}W / {{ missed.sim_losses }}L / {{ missed.sim_breakevens }}BE ({{ "%.0f"|format(missed.sim_win_rate_pct) }}% WR)
+        </span>
+        <span class="px-2.5 py-1 rounded-lg border font-bold {% if missed.net_missed_r >= 0 %}bg-emerald-500/15 text-emerald-300 border-emerald-500/40{% else %}bg-rose-500/15 text-rose-300 border-rose-500/40{% endif %}">
+          Net {{ "%+.2f"|format(missed.net_missed_r) }}R (~${{ "{:+,.0f}".format(missed.estimated_missed_dollars) }})
+        </span>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs">
+        <thead class="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700/60">
+          <tr>
+            <th class="py-2.5 px-4">Time (ET)</th>
+            <th class="py-2.5 px-4">Symbol</th>
+            <th class="py-2.5 px-4">Sim Entry</th>
+            <th class="py-2.5 px-4">Sim Exit</th>
+            <th class="py-2.5 px-4">Sim Outcome</th>
+            <th class="py-2.5 px-4">Sim MFE / MAE</th>
+            <th class="py-2.5 px-4">Sim R (~$)</th>
+            <th class="py-2.5 px-4">Rejection Reason</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-700/40 font-mono">
+          {% for ms in missed.items %}
+          <tr class="hover:bg-slate-700/20 transition">
+            <td class="py-2.5 px-4 text-slate-400 whitespace-nowrap">{{ ms.time_et }}</td>
+            <td class="py-2.5 px-4 font-bold">
+              <button type="button" onclick="openSymbolChart('{{ ms.symbol }}', '{{ selected_date }}')" class="text-sky-400 hover:text-sky-300 underline decoration-sky-500/40 underline-offset-2 transition">
+                {{ ms.symbol }}
+              </button>
+            </td>
+            <td class="py-2.5 px-4">${{ "%.2f"|format(ms.entry_price) }}</td>
+            <td class="py-2.5 px-4">{% if ms.sim_exit_price is not none %}${{ "%.2f"|format(ms.sim_exit_price) }}{% else %}—{% endif %}</td>
+            <td class="py-2.5 px-4 font-sans">
+              {% if ms.sim_outcome %}
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold
+                {% if ms.sim_outcome == 'TAKE_PROFIT' %}bg-emerald-500/15 text-emerald-300
+                {% elif ms.sim_outcome == 'STOP_LOSS' %}bg-rose-500/15 text-rose-300
+                {% elif ms.sim_outcome == 'BREAKEVEN' %}bg-sky-500/15 text-sky-300
+                {% else %}bg-slate-700 text-slate-300{% endif %}">
+                {{ ms.sim_outcome }}
+              </span>
+              {% else %}
+              <span class="text-slate-500">Pending</span>
+              {% endif %}
+            </td>
+            <td class="py-2.5 px-4 text-slate-300 whitespace-nowrap">
+              {% if ms.sim_mfe_r is not none %}{{ "%+.1f"|format(ms.sim_mfe_r) }}R{% else %}—{% endif %} /
+              {% if ms.sim_mae_r is not none %}-{{ "%.1f"|format(ms.sim_mae_r|abs) }}R{% else %}—{% endif %}
+            </td>
+            <td class="py-2.5 px-4 font-bold whitespace-nowrap {% if (ms.sim_pnl_r or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+              {% if ms.sim_pnl_r is not none %}
+                {{ "%+.2f"|format(ms.sim_pnl_r) }}R (${{ "{:+,.0f}".format(ms.sim_pnl_dollars or 0) }})
+              {% else %}—{% endif %}
+            </td>
+            <td class="py-2.5 px-4 font-sans text-slate-400 text-[11px]">{{ ms.rejection_reason }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
   <!-- Historical Daily Performance Table -->
   <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
     <div class="p-4 border-b border-slate-700/60">

@@ -292,6 +292,74 @@ def run_monte_carlo_and_projections(
     }
 
 
+def simulate_signal_counterfactual(
+    close_price: float,
+    or_low: float,
+    atr: float,
+    bars_after_signal: Sequence[Any],
+    breakeven_trigger_r: float = 1.0,
+    breakeven_offset: float = 0.02,
+    take_profit_r: float = 2.0,
+) -> Optional[Dict[str, Any]]:
+    """Simulates a rejected breakout signal against subsequent 5m bars using exact pTrading bracket rules."""
+    if not bars_after_signal or close_price <= 0:
+        return None
+
+    entry_price = round(close_price * 1.0005, 2)
+    atr_stop = round(close_price - 1.5 * atr, 2)
+    initial_stop = round(max(or_low, atr_stop), 2)
+    risk_1r = round(entry_price - initial_stop, 4)
+    if risk_1r <= 0:
+        return None
+
+    take_profit = round(entry_price + take_profit_r * risk_1r, 2)
+    be_trigger = entry_price + breakeven_trigger_r * risk_1r
+    be_stop = round(entry_price + breakeven_offset, 2)
+
+    active_stop = initial_stop
+    be_stepped = False
+    max_high = entry_price
+    min_low = entry_price
+
+    outcome = "EOD_CLOSE"
+    exit_price = float(bars_after_signal[-1].close)
+
+    for b in bars_after_signal:
+        bh = float(b.high)
+        bl = float(b.low)
+        if bh > max_high:
+            max_high = bh
+        if bl < min_low:
+            min_low = bl
+
+        # Conservative intrabar ordering: check active stop before take-profit
+        if bl <= active_stop:
+            exit_price = active_stop
+            outcome = "BREAKEVEN" if be_stepped else "STOP_LOSS"
+            break
+
+        if bh >= take_profit:
+            exit_price = take_profit
+            outcome = "TAKE_PROFIT"
+            break
+
+        if not be_stepped and bh >= be_trigger:
+            be_stepped = True
+            active_stop = be_stop
+
+    pnl_r = round((exit_price - entry_price) / risk_1r, 3)
+    mfe_r = round((max_high - entry_price) / risk_1r, 3)
+    mae_r = round((entry_price - min_low) / risk_1r, 3)
+
+    return {
+        "sim_outcome": outcome,
+        "sim_exit_price": round(exit_price, 2),
+        "sim_pnl_r": pnl_r,
+        "sim_mfe_r": mfe_r,
+        "sim_mae_r": mae_r,
+    }
+
+
 def calculate_strategy_health_score(
     cum_metrics: Dict[str, Any],
     roi_equity: Dict[str, Any],
@@ -1113,6 +1181,106 @@ class AnalyticsService:
                 )
             await conn.commit()
 
+        # 3. Evaluate counterfactual outcomes for REJECTED signals on report_date
+        await self.enrich_missed_signals_counterfactual(report_date)
+
+    async def enrich_missed_signals_counterfactual(self, report_date: str) -> int:
+        """Simulates rejected signals on report_date against 5m Alpaca bars up to 15:55 ET."""
+        try:
+            from app.services.market_scanner import get_market_scanner
+            scanner = get_market_scanner()
+        except Exception:
+            return 0
+
+        day_dt = datetime.strptime(report_date, "%Y-%m-%d").date()
+        session_start = datetime.combine(day_dt, time(9, 30), tzinfo=self.tz)
+        flatten_cutoff = datetime.combine(day_dt, time(15, 55), tzinfo=self.tz)
+
+        async with get_connection() as conn:
+            cursor = await conn.execute(
+                """
+                SELECT * FROM signals
+                WHERE status = 'REJECTED'
+                  AND substr(received_at, 1, 10) = ?
+                  AND sim_outcome IS NULL;
+                """,
+                (report_date,),
+            )
+            rejected_rows = [dict(r) for r in await cursor.fetchall()]
+
+        if not rejected_rows:
+            return 0
+
+        symbols = sorted({str(r["symbol"]).upper() for r in rejected_rows})
+        try:
+            bars_by_sym = await scanner.fetch_bars_multi(symbols, session_start, flatten_cutoff)
+        except Exception as e:
+            logger.warning("Failed to fetch 5m bars for missed signals audit: %s", e)
+            return 0
+
+        evaluated = 0
+        async with get_connection() as conn:
+            for sig in rejected_rows:
+                sym = str(sig["symbol"]).upper()
+                bars = bars_by_sym.get(sym, [])
+                if not bars:
+                    continue
+
+                # Determine signal trigger time in UTC
+                sig_dt = None
+                if sig.get("bar_time"):
+                    try:
+                        sig_dt = datetime.fromtimestamp(int(sig["bar_time"]), tz=ZoneInfo("UTC"))
+                    except Exception:
+                        sig_dt = None
+                if sig_dt is None:
+                    sig_dt = _parse_iso_dt(sig.get("received_at"))
+                    if sig_dt and sig_dt.tzinfo is None:
+                        sig_dt = sig_dt.replace(tzinfo=ZoneInfo("UTC"))
+
+                after_bars = []
+                for b in bars:
+                    bt = b.timestamp
+                    if bt.tzinfo is None:
+                        bt = bt.replace(tzinfo=ZoneInfo("UTC"))
+                    if sig_dt and bt <= sig_dt:
+                        continue
+                    if bt.astimezone(self.tz) > flatten_cutoff:
+                        continue
+                    after_bars.append(b)
+
+                sim = simulate_signal_counterfactual(
+                    close_price=float(sig["close_price"]),
+                    or_low=float(sig["or_low"]),
+                    atr=float(sig["atr"]),
+                    bars_after_signal=after_bars,
+                    breakeven_trigger_r=settings.BREAKEVEN_TRIGGER_R,
+                    breakeven_offset=settings.BREAKEVEN_OFFSET_DOLLARS,
+                    take_profit_r=2.0,
+                )
+                if sim:
+                    await conn.execute(
+                        """
+                        UPDATE signals
+                        SET sim_outcome = ?, sim_exit_price = ?, sim_pnl_r = ?,
+                            sim_mfe_r = ?, sim_mae_r = ?, sim_evaluated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?;
+                        """,
+                        (
+                            sim["sim_outcome"],
+                            sim["sim_exit_price"],
+                            sim["sim_pnl_r"],
+                            sim["sim_mfe_r"],
+                            sim["sim_mae_r"],
+                            sig["id"],
+                        ),
+                    )
+                    evaluated += 1
+            await conn.commit()
+
+        logger.info("Counterfactual audit evaluated %d missed/rejected signal(s) for %s.", evaluated, report_date)
+        return evaluated
+
     async def build_comprehensive_report(
         self,
         report_date: Optional[str] = None,
@@ -1145,7 +1313,13 @@ class AnalyticsService:
                 dict(r)
                 for r in await (
                     await conn.execute(
-                        "SELECT status, rejection_reason FROM signals WHERE substr(received_at, 1, 10) = ?;",
+                        """
+                        SELECT id, received_at, bar_time, symbol, close_price, or_high, or_low, atr,
+                               status, rejection_reason, sim_outcome, sim_exit_price, sim_pnl_r, sim_mfe_r, sim_mae_r
+                        FROM signals
+                        WHERE substr(received_at, 1, 10) = ?
+                        ORDER BY id ASC;
+                        """,
                         (target_date,),
                     )
                 ).fetchall()
@@ -1196,15 +1370,81 @@ class AnalyticsService:
         cumulative_metrics = self.compute_trade_metrics(cumulative_trades)
         roi_equity = self.compute_roi_and_equity(daily_rows, target_date)
 
-        # Signal funnel for target_date
+        # Signal funnel & Missed Signals Counterfactual Audit for target_date
         signal_funnel: Dict[str, int] = {}
         rejection_reasons: Dict[str, int] = {}
+        missed_items: List[Dict[str, Any]] = []
+        sim_wins = 0
+        sim_losses = 0
+        sim_bes = 0
+        sim_r_total = 0.0
+        concurrency_blocked = 0
+        concurrency_r_total = 0.0
+        one_r_dollars = (roi_equity["daily_starting_equity"] or 100000.0) * (settings.RISK_PERCENT_PER_TRADE / 100.0)
+
         for s in day_signals:
             st = str(s.get("status") or "UNKNOWN")
             signal_funnel[st] = signal_funnel.get(st, 0) + 1
             if s.get("rejection_reason"):
                 rr = str(s["rejection_reason"])
                 rejection_reasons[rr] = rejection_reasons.get(rr, 0) + 1
+
+            if st == "REJECTED":
+                ts_et = str(s.get("received_at") or "")
+                dt_parsed = _parse_iso_dt(ts_et)
+                if dt_parsed:
+                    if dt_parsed.tzinfo is None:
+                        dt_parsed = dt_parsed.replace(tzinfo=ZoneInfo("UTC"))
+                    ts_et = dt_parsed.astimezone(self.tz).strftime("%H:%M:%S ET")
+
+                sim_r = s.get("sim_pnl_r")
+                sim_out = s.get("sim_outcome")
+                is_conc = "concurrent" in str(s.get("rejection_reason") or "").lower()
+                if is_conc:
+                    concurrency_blocked += 1
+
+                if sim_r is not None:
+                    r_f = float(sim_r)
+                    sim_r_total += r_f
+                    if is_conc:
+                        concurrency_r_total += r_f
+                    if r_f > 0.1:
+                        sim_wins += 1
+                    elif r_f < -0.1:
+                        sim_losses += 1
+                    else:
+                        sim_bes += 1
+
+                missed_items.append(
+                    {
+                        "time_et": ts_et,
+                        "symbol": s["symbol"],
+                        "entry_price": round(float(s["close_price"]) * 1.0005, 2),
+                        "rejection_reason": s.get("rejection_reason") or "",
+                        "is_concurrency_cap": is_conc,
+                        "sim_outcome": sim_out,
+                        "sim_exit_price": s.get("sim_exit_price"),
+                        "sim_pnl_r": round(float(sim_r), 2) if sim_r is not None else None,
+                        "sim_pnl_dollars": round(float(sim_r) * one_r_dollars, 2) if sim_r is not None else None,
+                        "sim_mfe_r": round(float(s["sim_mfe_r"]), 2) if s.get("sim_mfe_r") is not None else None,
+                        "sim_mae_r": round(float(s["sim_mae_r"]), 2) if s.get("sim_mae_r") is not None else None,
+                    }
+                )
+
+        eval_cnt = sim_wins + sim_losses + sim_bes
+        missed_signals_audit = {
+            "total_rejected": len(missed_items),
+            "evaluated_count": eval_cnt,
+            "concurrency_blocked_count": concurrency_blocked,
+            "concurrency_net_r": round(concurrency_r_total, 2),
+            "sim_wins": sim_wins,
+            "sim_losses": sim_losses,
+            "sim_breakevens": sim_bes,
+            "sim_win_rate_pct": round((sim_wins / eval_cnt) * 100.0, 1) if eval_cnt > 0 else 0.0,
+            "net_missed_r": round(sim_r_total, 2),
+            "estimated_missed_dollars": round(sim_r_total * one_r_dollars, 2),
+            "items": missed_items,
+        }
 
         cancelled_orders_today = sum(
             1 for o in day_orders if str(o.get("status") or "").upper() == "CANCELLED"
@@ -1264,6 +1504,7 @@ class AnalyticsService:
                 "rejection_reasons": rejection_reasons,
                 "expired_stale_orders": cancelled_orders_today,
             },
+            "missed_signals_audit": missed_signals_audit,
             "risk_of_ruin": {
                 "analytical": analytical_ror,
                 "monte_carlo": mc_projections["empirical_ror"],

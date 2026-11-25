@@ -230,3 +230,32 @@ async def test_chartmill_attribution_persisted_and_joined():
     assert cm_attr["setup_rating_buckets"]["Setup >= 8"]["avg_r"] == 2.0
     assert cm_attr["fundamental_rating_buckets"]["Fund >= 5"]["avg_r"] == 2.0
     assert "Technology" in cm_attr["sector_buckets"]
+
+
+def test_simulate_signal_counterfactual_outcomes():
+    from types import SimpleNamespace
+    from app.services.analytics_service import simulate_signal_counterfactual
+
+    # Entry ~100.05, Stop=98.05 (1R=2.00), BE trigger=102.05, TP=104.05
+    bars_tp = [
+        SimpleNamespace(high=102.50, low=99.80, close=102.20),  # Triggers BE
+        SimpleNamespace(high=104.50, low=101.50, close=104.10),  # Hits +2R TP
+    ]
+    res_tp = simulate_signal_counterfactual(100.0, 98.05, 2.0, bars_tp)
+    assert res_tp["sim_outcome"] == "TAKE_PROFIT"
+    assert res_tp["sim_pnl_r"] == pytest.approx(2.0, rel=1e-2)
+
+    bars_be = [
+        SimpleNamespace(high=102.50, low=99.80, close=102.20),  # Triggers BE
+        SimpleNamespace(high=101.80, low=99.50, close=99.80),  # Stopped at BE (100.07)
+    ]
+    res_be = simulate_signal_counterfactual(100.0, 98.05, 2.0, bars_be)
+    assert res_be["sim_outcome"] == "BREAKEVEN"
+    assert abs(res_be["sim_pnl_r"]) < 0.05
+
+    bars_sl = [
+        SimpleNamespace(high=100.40, low=97.90, close=98.00),  # Hits initial stop
+    ]
+    res_sl = simulate_signal_counterfactual(100.0, 98.05, 2.0, bars_sl)
+    assert res_sl["sim_outcome"] == "STOP_LOSS"
+    assert res_sl["sim_pnl_r"] == pytest.approx(-1.0, rel=1e-2)

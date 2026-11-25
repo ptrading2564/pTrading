@@ -213,6 +213,18 @@ async def init_db() -> None:
                 "short_float_pct": "REAL",
             },
         )
+        await _ensure_columns(
+            conn,
+            "signals",
+            {
+                "sim_outcome": "TEXT",
+                "sim_exit_price": "REAL",
+                "sim_pnl_r": "REAL",
+                "sim_mfe_r": "REAL",
+                "sim_mae_r": "REAL",
+                "sim_evaluated_at": "TIMESTAMP",
+            },
+        )
 
         # System state key-value table
         await conn.execute(

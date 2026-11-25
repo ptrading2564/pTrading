@@ -345,6 +345,48 @@ class StrategyReviewer:
                 }
             )
 
+        # 8c. Missed / Rejected Signals Counterfactual Audit
+        missed = report.get("missed_signals_audit", {})
+        conc_cnt = int(missed.get("concurrency_blocked_count", 0))
+        conc_net_r = float(missed.get("concurrency_net_r", 0.0))
+        if conc_cnt >= 3 and int(missed.get("evaluated_count", 0)) >= 3:
+            if conc_net_r >= 2.0:
+                findings.append(
+                    {
+                        "id": "CONCURRENCY_OPPORTUNITY_COST",
+                        "title": "Concurrency Cap Blocked Net-Winning Signals Today",
+                        "severity": "WATCH",
+                        "category": "PORTFOLIO_RISK",
+                        "sample_size": conc_cnt,
+                        "confidence": "LOW",
+                        "evidence": (
+                            f"{conc_cnt} signals blocked by the 4/4 concurrency cap simulated a net "
+                            f"{conc_net_r:+.2f}R ({missed.get('sim_wins', 0)}W / {missed.get('sim_losses', 0)}L / {missed.get('sim_breakevens', 0)}BE)."
+                        ),
+                        "recommendation": (
+                            "Check whether slots were occupied by prior-day carryovers; track across >= 15 sessions before considering raising MAX_CONCURRENT_POSITIONS."
+                        ),
+                        "config_knob": "MAX_CONCURRENT_POSITIONS",
+                    }
+                )
+            elif conc_net_r <= -1.0:
+                findings.append(
+                    {
+                        "id": "CONCURRENCY_CAP_PROTECTED",
+                        "title": "4/4 Concurrency Cap Protected Capital Today",
+                        "severity": "INFO",
+                        "category": "PORTFOLIO_RISK",
+                        "sample_size": conc_cnt,
+                        "confidence": "LOW",
+                        "evidence": (
+                            f"{conc_cnt} signals blocked by the 4/4 concurrency cap would have lost "
+                            f"{conc_net_r:+.2f}R in counterfactual simulation."
+                        ),
+                        "recommendation": "Keep MAX_CONCURRENT_POSITIONS at 4; it shielded you from midday overtrading.",
+                        "config_knob": "MAX_CONCURRENT_POSITIONS",
+                    }
+                )
+
         # 9. Healthy Baseline Info Note if no issues found
         if not findings:
             findings.append(
@@ -538,6 +580,7 @@ class StrategyReviewer:
             "daily_trades_metrics": report["daily_trades_metrics"],
             "cumulative_trades_metrics": report["cumulative_trades_metrics"],
             "signal_funnel": report["signal_funnel"],
+            "missed_signals_audit": report.get("missed_signals_audit", {}),
             "risk_of_ruin": report["risk_of_ruin"],
             "projections": report["projections"],
             "diagnostic_findings": diagnostics,
@@ -553,6 +596,11 @@ class StrategyReviewer:
             "4. Edge Health, Risk of Ruin & Forward Projections\n"
             "5. Prioritized Next Steps (strictly separating Immediate Operational Fixes from "
             "Testable Strategy Hypotheses, and explicitly citing sample sizes so we never overfit to small samples).\n\n"
+            "IMPORTANT METRIC DEFINITIONS:\n"
+            "- `slippage_dollars` and `slippage_r` are computed as `(actual_buy_fill_price - signal_limit_price)`. "
+            "A NEGATIVE value on a BUY order means positive PRICE IMPROVEMENT (filled cheaper than limit), NOT execution drag or friction. "
+            "Only POSITIVE values represent adverse slippage drag.\n"
+            "- `missed_signals_audit` contains counterfactual 5m-bar simulations of today's rejected signals using exact strategy rules.\n\n"
             "Ground EVERY claim in the exact numbers from the JSON data below. Reference specific "
             "`app/config.py` parameters when suggesting experiments.\n\n"
             f"DATA:\n{json.dumps(compact_payload, indent=2)}"
