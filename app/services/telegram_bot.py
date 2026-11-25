@@ -155,8 +155,12 @@ class TelegramService:
             ]
             top_notes = "\n\n<b>Strategy Review Highlights:</b>\n" + "\n".join(highlights)
 
+        health = report.get("health_score", {})
+        health_str = f"{health.get('score', 0)}/100 ({health.get('grade', 'N/A')})" if health else "N/A"
+
         text = (
             f"{pnl_icon} <b>Daily Comprehensive Report ({d_date})</b>\n"
+            f"<b>Strategy Health:</b> {health_str}\n"
             f"<b>Daily P&amp;L:</b> ${pnl:+,.2f} ({roi.get('daily_roi_pct', 0.0):+.2f}%)\n"
             f"<b>Equity:</b> ${roi.get('daily_ending_equity', 0.0):,.2f} | <b>Cum ROI:</b> {roi.get('cumulative_roi_pct', 0.0):+.2f}%\n"
             f"<b>Trades Today:</b> {daily.get('total_trades', 0)} ({daily.get('wins', 0)}W/{daily.get('losses', 0)}L/{daily.get('breakevens', 0)}BE | {daily.get('total_r', 0.0):+.2f}R)\n"

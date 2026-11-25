@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     DAILY_REPORT_DELAY_MINUTES: int = 5  # Minutes after market close to generate EOD report
     MONTE_CARLO_SIMULATIONS: int = 5000
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GEMINI_MODEL: str = "gemini-3.8-flash"
 
 
 settings = Settings()

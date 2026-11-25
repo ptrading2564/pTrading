@@ -9,13 +9,22 @@
 {% set ror_mc = ror.monte_carlo %}
 {% set proj = report.projections %}
 {% set funnel = report.signal_funnel %}
+{% set health = report.health_score or {'score': 0, 'grade': 'N/A', 'status': 'NO_DATA', 'pillars': {}} %}
 
 <div class="space-y-6">
   <!-- Header & Controls -->
   <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-700/60 pb-4">
     <div>
-      <div class="flex items-center gap-2.5">
+      <div class="flex flex-wrap items-center gap-2.5">
         <h1 class="text-xl font-bold text-white">Daily Comprehensive Analysis & Strategy Review</h1>
+        <span class="text-xs px-2.5 py-0.5 rounded-full font-bold font-mono border
+          {% if health.score >= 75 %}bg-emerald-500/15 text-emerald-300 border-emerald-500/40
+          {% elif health.score >= 55 %}bg-sky-500/15 text-sky-300 border-sky-500/40
+          {% elif health.score > 0 %}bg-amber-500/15 text-amber-300 border-amber-500/40
+          {% else %}bg-slate-700/60 text-slate-300 border-slate-600{% endif %}"
+          title="Edge {{ health.pillars.edge_expectancy.score if health.pillars.edge_expectancy else 0 }}/30 | RoR {{ health.pillars.risk_of_ruin.score if health.pillars.risk_of_ruin else 0 }}/25 | Stability {{ health.pillars.drawdown_stability.score if health.pillars.drawdown_stability else 0 }}/20 | Exec {{ health.pillars.execution_quality.score if health.pillars.execution_quality else 0 }}/15 | Sample {{ health.pillars.sample_confidence.score if health.pillars.sample_confidence else 0 }}/10">
+          Health: {{ health.score }}/100 ({{ health.grade }}) &bull; {{ health.status }}
+        </span>
         <span class="text-[11px] px-2 py-0.5 rounded-full font-medium border
           {% if proj.confidence == 'MEANINGFUL' %}bg-emerald-500/10 text-emerald-400 border-emerald-500/30
           {% elif proj.confidence == 'LOW' %}bg-amber-500/10 text-amber-400 border-amber-500/30

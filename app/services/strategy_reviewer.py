@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Tuple
@@ -557,39 +558,54 @@ class StrategyReviewer:
             f"DATA:\n{json.dumps(compact_payload, indent=2)}"
         )
 
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{settings.GEMINI_MODEL}:generateContent"
-        )
         headers = {
             "x-goog-api-key": settings.GEMINI_API_KEY.strip(),
             "Content-Type": "application/json",
         }
-        try:
-            async with httpx.AsyncClient(timeout=35.0) as client:
-                res = await client.post(
-                    url,
-                    headers=headers,
-                    json={"contents": [{"parts": [{"text": prompt}]}]},
+        # Try configured model (with 1 retry on 503), then automatic fallback models if experiencing high demand
+        candidate_models = [settings.GEMINI_MODEL]
+        for fb in ("gemini-3.8-flash-lite", "gemini-3.0-flash", "gemini-2.5-flash-lite"):
+            if fb not in candidate_models:
+                candidate_models.append(fb)
+
+        async with httpx.AsyncClient(timeout=35.0) as client:
+            for model_name in candidate_models:
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model_name}:generateContent"
                 )
-                if res.status_code == 200:
-                    data = res.json()
-                    text = (
-                        data.get("candidates", [{}])[0]
-                        .get("content", {})
-                        .get("parts", [{}])[0]
-                        .get("text", "")
-                        .strip()
-                    )
-                    if text:
-                        return text, "gemini", diagnostics
-                logger.warning(
-                    "Gemini API returned status %d (%s); falling back to deterministic review.",
-                    res.status_code,
-                    res.text[:300],
-                )
-        except Exception as e:
-            logger.warning("Gemini strategy review call failed (%s); falling back to deterministic review.", e)
+                for attempt in range(2):
+                    try:
+                        res = await client.post(
+                            url,
+                            headers=headers,
+                            json={"contents": [{"parts": [{"text": prompt}]}]},
+                        )
+                        if res.status_code == 200:
+                            data = res.json()
+                            text = (
+                                data.get("candidates", [{}])[0]
+                                .get("content", {})
+                                .get("parts", [{}])[0]
+                                .get("text", "")
+                                .strip()
+                            )
+                            if text:
+                                return text, f"gemini ({model_name})", diagnostics
+                        if res.status_code in (429, 503) and attempt == 0:
+                            logger.warning("Gemini model %s returned %d; retrying in 1.5s...", model_name, res.status_code)
+                            await asyncio.sleep(1.5)
+                            continue
+                        logger.warning(
+                            "Gemini model %s returned status %d (%s); trying next fallback.",
+                            model_name,
+                            res.status_code,
+                            res.text[:200],
+                        )
+                        break
+                    except Exception as e:
+                        logger.warning("Gemini call for %s failed (%s); trying next fallback.", model_name, e)
+                        break
 
         return deterministic_md, "deterministic", diagnostics
 

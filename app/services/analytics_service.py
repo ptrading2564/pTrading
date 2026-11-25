@@ -292,6 +292,116 @@ def run_monte_carlo_and_projections(
     }
 
 
+def calculate_strategy_health_score(
+    cum_metrics: Dict[str, Any],
+    roi_equity: Dict[str, Any],
+    analytical_ror: Dict[str, Any],
+    mc_ror: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Calculates a transparent 0-100 Strategy Health Score across 5 weighted pillars."""
+    n_trades = int(cum_metrics.get("total_trades", 0))
+    if n_trades == 0:
+        return {
+            "score": 0,
+            "grade": "N/A",
+            "status": "NO_DATA",
+            "pillars": {
+                "edge_expectancy": {"score": 0, "max": 30},
+                "risk_of_ruin": {"score": 0, "max": 25},
+                "drawdown_stability": {"score": 0, "max": 20},
+                "execution_quality": {"score": 0, "max": 15},
+                "sample_confidence": {"score": 0, "max": 10},
+            },
+        }
+
+    # 1. Edge & Expectancy (30 pts)
+    exp_r = float(cum_metrics.get("expectancy_r", 0.0))
+    pf = float(cum_metrics.get("profit_factor", 0.0))
+    exp_pts = max(0.0, min(18.0, (exp_r / 0.40) * 18.0)) if exp_r > 0 else 0.0
+    pf_pts = max(0.0, min(12.0, ((pf - 1.0) / 1.5) * 12.0)) if pf > 1.0 else 0.0
+    edge_score = round(exp_pts + pf_pts, 1)
+
+    # 2. Risk of Ruin & Sizing Safety (25 pts)
+    mc_20 = mc_ror.get("20pct")
+    a_20 = analytical_ror.get("drawdown_probabilities", {}).get("20pct")
+    ror_val = float(mc_20) if mc_20 is not None else (float(a_20) if a_20 is not None else 50.0)
+    if ror_val <= 1.0:
+        ror_pts = 18.0
+    elif ror_val <= 5.0:
+        ror_pts = 14.0
+    elif ror_val <= 15.0:
+        ror_pts = 9.0
+    elif ror_val <= 35.0:
+        ror_pts = 4.0
+    else:
+        ror_pts = 0.0
+
+    sizing_status = analytical_ror.get("sizing_status", "INSUFFICIENT_DATA")
+    sizing_pts = 7.0 if sizing_status == "CONSERVATIVE" else (4.0 if sizing_status == "AGGRESSIVE" else 0.0)
+    ror_score = round(ror_pts + sizing_pts, 1)
+
+    # 3. Drawdown & Equity Stability (20 pts)
+    max_dd = float(roi_equity.get("max_drawdown_pct", 0.0))
+    sqn = float(cum_metrics.get("sqn", 0.0))
+    dd_pts = max(0.0, min(12.0, 12.0 * (1.0 - (max_dd / 20.0))))
+    sqn_pts = max(0.0, min(8.0, (sqn / 2.0) * 8.0)) if sqn > 0 else 0.0
+    if roi_equity.get("circuit_breaker_tripped_today"):
+        dd_pts = max(0.0, dd_pts - 4.0)
+    stability_score = round(dd_pts + sqn_pts, 1)
+
+    # 4. Execution & Trade Quality (15 pts)
+    realized_rr = float(cum_metrics.get("realized_rr_r", 0.0))
+    rr_pts = max(0.0, min(7.0, (realized_rr / 2.0) * 7.0))
+    avg_slip_r = abs(float(cum_metrics.get("slippage", {}).get("avg_slippage_r", 0.0)))
+    # Positive slippage is adverse; negative slippage means price improvement
+    raw_slip_r = float(cum_metrics.get("slippage", {}).get("avg_slippage_r", 0.0))
+    slip_pts = 4.0 if raw_slip_r <= 0.05 else (2.0 if raw_slip_r <= 0.10 else 0.0)
+    edge_ratio = cum_metrics.get("mfe_mae", {}).get("edge_ratio")
+    mfe_pts = max(0.0, min(4.0, (float(edge_ratio) / 1.5) * 4.0)) if edge_ratio is not None else 2.0
+    exec_score = round(rr_pts + slip_pts + mfe_pts, 1)
+
+    # 5. Statistical Confidence / Sample Size (10 pts)
+    sample_score = round(min(10.0, (n_trades / 30.0) * 10.0), 1)
+
+    total_score = int(round(edge_score + ror_score + stability_score + exec_score + sample_score))
+    total_score = max(0, min(100, total_score))
+
+    if total_score >= 85:
+        grade = "A"
+    elif total_score >= 75:
+        grade = "B+"
+    elif total_score >= 65:
+        grade = "B"
+    elif total_score >= 55:
+        grade = "C"
+    elif total_score >= 40:
+        grade = "D"
+    else:
+        grade = "F"
+
+    if n_trades < 15:
+        status = "PROMISING (EARLY SAMPLE)" if total_score >= 65 else "EARLY SAMPLE"
+    elif total_score >= 75:
+        status = "STRONG EDGE"
+    elif total_score >= 55:
+        status = "HEALTHY / MONITOR"
+    else:
+        status = "AT RISK"
+
+    return {
+        "score": total_score,
+        "grade": grade,
+        "status": status,
+        "pillars": {
+            "edge_expectancy": {"score": edge_score, "max": 30},
+            "risk_of_ruin": {"score": ror_score, "max": 25},
+            "drawdown_stability": {"score": stability_score, "max": 20},
+            "execution_quality": {"score": exec_score, "max": 15},
+            "sample_confidence": {"score": sample_score, "max": 10},
+        },
+    }
+
+
 class AnalyticsService:
     """Computes daily & cumulative P&L, ROI, R:R, MFE/MAE, execution diagnostics, RoR, and projections."""
 
@@ -1124,9 +1234,17 @@ class AnalyticsService:
             num_simulations=sims,
         )
 
+        health_score = calculate_strategy_health_score(
+            cum_metrics=cumulative_metrics,
+            roi_equity=roi_equity,
+            analytical_ror=analytical_ror,
+            mc_ror=mc_projections["empirical_ror"],
+        )
+
         return {
             "report_date": target_date,
             "generated_at": datetime.now(self.tz).isoformat(),
+            "health_score": health_score,
             "strategy_params": {
                 "risk_percent_per_trade": settings.RISK_PERCENT_PER_TRADE,
                 "max_concurrent_positions": settings.MAX_CONCURRENT_POSITIONS,
