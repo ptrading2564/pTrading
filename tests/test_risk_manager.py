@@ -145,3 +145,69 @@ async def test_daily_circuit_breaker():
 
     assert eval_res.approved is False
     assert "Daily circuit breaker tripped" in eval_res.rejection_reason
+
+
+@pytest.mark.asyncio
+async def test_breakeven_slot_recycling_allows_fifth_position():
+    from app.db import get_connection
+
+    mock_broker = MockBroker(equity=100000.0)
+    mock_broker.positions = [
+        PositionInfo("SYM1", 10, 100.0, 103.0, 30.0, 1030.0),
+        PositionInfo("SYM2", 10, 100.0, 101.0, 10.0, 1010.0),
+        PositionInfo("SYM3", 10, 100.0, 101.0, 10.0, 1010.0),
+        PositionInfo("SYM4", 10, 100.0, 101.0, 10.0, 1010.0),
+    ]
+    # Mark SYM1 as already stepped to Breakeven (+1.0R risk-free)
+    async with get_connection() as conn:
+        await conn.execute("DELETE FROM trades;")
+        await conn.execute(
+            """
+            INSERT INTO trades (client_order_id, symbol, qty, entry_price, stop_loss_price, take_profit_price, is_open, breakeven_stepped)
+            VALUES ('pt_be_1', 'SYM1', 10, 100.0, 100.02, 104.0, 1, 1);
+            """
+        )
+        await conn.commit()
+
+    risk_manager = RiskManager(mock_broker)
+    eval_res = await risk_manager.evaluate_signal(
+        symbol="NEW_FIFTH",
+        close_price=50.0,
+        or_high=49.0,
+        or_low=48.0,
+        atr=1.0,
+    )
+    assert eval_res.approved is True
+    assert eval_res.qty > 0
+
+
+@pytest.mark.asyncio
+async def test_breakeven_slot_recycling_respects_hard_cap_6():
+    from app.db import get_connection
+
+    mock_broker = MockBroker(equity=100000.0)
+    mock_broker.positions = [
+        PositionInfo(f"SYM{i}", 10, 100.0, 103.0, 30.0, 1030.0) for i in range(1, 7)
+    ]
+    async with get_connection() as conn:
+        await conn.execute("DELETE FROM trades;")
+        for i in range(1, 5):
+            await conn.execute(
+                """
+                INSERT INTO trades (client_order_id, symbol, qty, entry_price, stop_loss_price, take_profit_price, is_open, breakeven_stepped)
+                VALUES (?, ?, 10, 100.0, 100.02, 104.0, 1, 1);
+                """,
+                (f"pt_be_{i}", f"SYM{i}"),
+            )
+        await conn.commit()
+
+    risk_manager = RiskManager(mock_broker)
+    eval_res = await risk_manager.evaluate_signal(
+        symbol="NEW_SEVENTH",
+        close_price=50.0,
+        or_high=49.0,
+        or_low=48.0,
+        atr=1.0,
+    )
+    assert eval_res.approved is False
+    assert "Max concurrent total positions cap reached" in eval_res.rejection_reason

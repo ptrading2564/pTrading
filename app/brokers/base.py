@@ -41,6 +41,10 @@ class BrokerAdapter(ABC):
         """Fetch live account equity."""
         pass
 
+    async def get_buying_power(self) -> Optional[float]:
+        """Fetch live intraday buying power (optional; returns None if unsupported)."""
+        return None
+
     @abstractmethod
     async def get_positions(self) -> List[PositionInfo]:
         """Fetch all open positions."""

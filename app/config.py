@@ -69,7 +69,8 @@ class Settings(BaseSettings):
 
     # Risk Management Parameters
     RISK_PERCENT_PER_TRADE: float = 0.5  # 0.5% equity per trade
-    MAX_CONCURRENT_POSITIONS: int = 4
+    MAX_CONCURRENT_POSITIONS: int = 4  # Max at-risk positions (2.0% max open heat)
+    MAX_TOTAL_POSITIONS_WITH_BREAKEVEN: int = 6  # Hard cap when extra slots are freed by +1R breakeven trades
     MAX_EQUITY_PERCENT_PER_STOCK: float = 25.0  # Max 25% single stock allocation
     DAILY_MAX_LOSS_PERCENT: float = 2.0  # -2.0% daily circuit breaker
     MIN_STOP_DISTANCE_DOLLARS: float = 0.10

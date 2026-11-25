@@ -49,6 +49,16 @@ class AlpacaAdapter(BrokerAdapter):
         account = await asyncio.to_thread(self.client.get_account)
         return float(account.equity)
 
+    async def get_buying_power(self) -> Optional[float]:
+        """Fetch live intraday buying power."""
+        try:
+            account = await asyncio.to_thread(self.client.get_account)
+            bp = getattr(account, "daytrading_buying_power", None) or getattr(account, "buying_power", None)
+            return float(bp) if bp is not None else None
+        except Exception as e:
+            logger.debug("Buying power query failed: %s", e)
+            return None
+
     async def get_positions(self) -> List[PositionInfo]:
         """Fetch all open positions."""
         raw_positions = await asyncio.to_thread(self.client.get_all_positions)

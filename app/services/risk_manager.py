@@ -161,11 +161,41 @@ class RiskManager:
                 stop_distance=0.0,
             )
 
-        total_active = len(positions) + len([o for o in open_orders if o.side == "buy"])
-        if total_active >= settings.MAX_CONCURRENT_POSITIONS:
+        # 3b. Risk-Free Slot Recycling:
+        # Positions that have reached +1.0R and stepped to Breakeven carry ~0% open risk,
+        # so they free up an at-risk slot (up to MAX_TOTAL_POSITIONS_WITH_BREAKEVEN hard cap).
+        be_protected_symbols = set()
+        async with get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT symbol FROM trades WHERE is_open = 1 AND breakeven_stepped = 1;"
+            )
+            be_protected_symbols = {str(r["symbol"]).upper() for r in await cursor.fetchall()}
+
+        pending_buys = [o for o in open_orders if str(o.side).lower() == "buy"]
+        at_risk_positions = [p for p in positions if p.symbol.upper() not in be_protected_symbols]
+        total_at_risk = len(at_risk_positions) + len(pending_buys)
+        total_positions = len(positions) + len(pending_buys)
+
+        if total_at_risk >= settings.MAX_CONCURRENT_POSITIONS:
             return RiskEvaluation(
                 approved=False,
-                rejection_reason=f"Max concurrent positions cap reached ({total_active}/{settings.MAX_CONCURRENT_POSITIONS}).",
+                rejection_reason=(
+                    f"Max concurrent positions cap reached ({total_at_risk}/{settings.MAX_CONCURRENT_POSITIONS} at-risk)."
+                ),
+                qty=0,
+                entry_limit_price=close_price,
+                stop_loss_price=0.0,
+                take_profit_price=0.0,
+                risk_dollars=0.0,
+                stop_distance=0.0,
+            )
+
+        if total_positions >= settings.MAX_TOTAL_POSITIONS_WITH_BREAKEVEN:
+            return RiskEvaluation(
+                approved=False,
+                rejection_reason=(
+                    f"Max concurrent total positions cap reached ({total_positions}/{settings.MAX_TOTAL_POSITIONS_WITH_BREAKEVEN} including breakeven)."
+                ),
                 qty=0,
                 entry_limit_price=close_price,
                 stop_loss_price=0.0,
@@ -201,11 +231,16 @@ class RiskManager:
         risk_dollars = equity * (settings.RISK_PERCENT_PER_TRADE / 100.0)
         raw_shares = floor(risk_dollars / stop_distance)
 
-        # 6. Max 25% single stock allocation cap
+        # 6. Max 25% single stock allocation cap + live buying-power safety check
         max_capital_for_stock = equity * (settings.MAX_EQUITY_PERCENT_PER_STOCK / 100.0)
         max_allowed_shares = floor(max_capital_for_stock / entry_limit_price)
 
         shares = min(raw_shares, max_allowed_shares)
+
+        buying_power = await self.broker.get_buying_power()
+        if buying_power is not None and buying_power > 0:
+            max_bp_shares = floor((buying_power * 0.98) / entry_limit_price)
+            shares = min(shares, max_bp_shares)
         if shares <= 0:
             return RiskEvaluation(
                 approved=False,
