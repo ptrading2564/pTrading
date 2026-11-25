@@ -23,6 +23,7 @@ import logging
 from app.brokers.alpaca_adapter import AlpacaAdapter
 from app.config import ExecutionMode, settings
 from app.db import (
+    add_capital_ledger_entry,
     get_chartmill_profile,
     get_connection,
     get_daily_report,
@@ -32,9 +33,18 @@ from app.db import (
     save_chartmill_universe,
     save_daily_report,
     set_system_state,
+    set_validation_check,
+    update_financing_config,
 )
 from app.services.analytics_service import analytics_service
 from app.services.chartmill_importer import chartmill_importer
+from app.services.financing_service import (
+    FLOW_DIRECTIONS,
+    RISK_PROFILES,
+    VALID_LEDGER_FLOW_TYPES,
+    VALID_LIFECYCLE_STAGES,
+    financing_service,
+)
 from app.services.lifecycle_worker import LifecycleWorker
 from app.services.market_scanner import get_market_scanner
 from app.services.risk_manager import RiskManager
@@ -551,6 +561,12 @@ async def dashboard_home(
         logger.warning("Error fetching scanner status info: %s", e)
         scanner_info = {"status": "UNAVAILABLE", "market_health": {}}
 
+    try:
+        financing_controls = await financing_service.get_effective_risk_controls(equity)
+    except Exception as e:
+        logger.warning("Error fetching financing controls for dashboard: %s", e)
+        financing_controls = None
+
     user_info = getattr(request.state, "user", None) or {
         "user": username,
         "name": username.split("@")[0].capitalize(),
@@ -568,6 +584,7 @@ async def dashboard_home(
             "daily_pnl": daily_pnl,
             "daily_pnl_pct": daily_pnl_pct,
             "daily_breaker_limit": settings.DAILY_MAX_LOSS_PERCENT,
+            "financing_controls": financing_controls,
             "positions": positions,
             "max_positions": settings.MAX_CONCURRENT_POSITIONS,
             "is_market_open": is_market_open,
@@ -1099,4 +1116,202 @@ async def get_symbol_chart_data(
             "chartmill_fa_url": f"https://www.chartmill.com/stock/quote/{clean_sym}/fundamental-analysis",
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# Financing, Paper-to-Live Qualification & Wealth-Building Routes
+# ---------------------------------------------------------------------------
+
+
+@router.get("/financing", response_class=HTMLResponse)
+async def financing_page(
+    request: Request,
+    username: str = Depends(authenticate_user),
+):
+    """Renders the Capital Governance, Paper-to-Live Qualification & Wealth-Building page."""
+    tz = ZoneInfo(settings.MARKET_TIMEZONE)
+    now_et = datetime.now(tz)
+    current_time_et = now_et.strftime("%H:%M:%S")
+    today_date = now_et.strftime("%Y-%m-%d")
+
+    broker_equity: Optional[float] = None
+    is_market_open = False
+    try:
+        broker_equity = await broker.get_account_equity()
+        is_market_open = await broker.is_market_open()
+    except Exception as e:
+        logger.warning("Financing page broker query failed: %s", e)
+
+    summary = await financing_service.build_financing_summary(broker_equity=broker_equity)
+    user_info = getattr(request.state, "user", None) or {
+        "user": username,
+        "name": username.split("@")[0].capitalize(),
+        "avatar": "",
+    }
+
+    return templates.TemplateResponse(
+        request=request,
+        name="financing.html",
+        context={
+            "user": user_info,
+            "username": username,
+            "current_time_et": current_time_et,
+            "is_market_open": is_market_open,
+            "today_date": today_date,
+            "summary": summary,
+        },
+    )
+
+
+@router.get("/api/financing/summary")
+async def api_financing_summary(username: str = Depends(authenticate_user)):
+    """Returns JSON payload of qualification verdict, health ladder, custody & ledger."""
+    broker_equity: Optional[float] = None
+    try:
+        broker_equity = await broker.get_account_equity()
+    except Exception:
+        pass
+    summary = await financing_service.build_financing_summary(broker_equity=broker_equity)
+    return JSONResponse(content=summary)
+
+
+@router.post("/api/financing/config")
+async def api_update_financing_config(
+    risk_profile: str = Form("P2_BALANCED"),
+    seed_capital: float = Form(10000.0),
+    target_capital_goal: float = Form(50000.0),
+    reserve_pct: float = Form(20.0),
+    max_live_accessible_capital: Optional[str] = Form(None),
+    strategy_version: str = Form("orb_v1"),
+    enforcement_enabled: Optional[str] = Form(None),
+    qual_min_trades: int = Form(30),
+    qual_min_trading_days: int = Form(10),
+    qual_min_expectancy_r: float = Form(0.15),
+    qual_min_profit_factor: float = Form(1.30),
+    qual_max_drawdown_pct: float = Form(10.0),
+    qual_max_avg_slippage_r: float = Form(0.10),
+    username: str = Depends(authenticate_user),
+):
+    """Updates Financing wealth targets, risk profile, live ceiling, and qualification gates."""
+    profile_key = risk_profile if risk_profile in RISK_PROFILES else "P2_BALANCED"
+    cap_val: Optional[float] = None
+    if max_live_accessible_capital is not None and str(max_live_accessible_capital).strip() != "":
+        try:
+            parsed = float(max_live_accessible_capital)
+            if parsed > 0:
+                cap_val = parsed
+        except ValueError:
+            cap_val = None
+
+    await update_financing_config(
+        {
+            "risk_profile": profile_key,
+            "seed_capital": max(100.0, float(seed_capital)),
+            "target_capital_goal": max(float(seed_capital) + 100.0, float(target_capital_goal)),
+            "reserve_pct": max(0.0, min(90.0, float(reserve_pct))),
+            "max_live_accessible_capital": cap_val,
+            "strategy_version": (strategy_version or "orb_v1").strip()[:40],
+            "enforcement_enabled": 1 if enforcement_enabled else 0,
+            "qual_min_trades": max(5, int(qual_min_trades)),
+            "qual_min_trading_days": max(1, int(qual_min_trading_days)),
+            "qual_min_expectancy_r": float(qual_min_expectancy_r),
+            "qual_min_profit_factor": max(1.0, float(qual_min_profit_factor)),
+            "qual_max_drawdown_pct": max(1.0, float(qual_max_drawdown_pct)),
+            "qual_max_avg_slippage_r": max(0.01, float(qual_max_avg_slippage_r)),
+        }
+    )
+    return RedirectResponse(url="/financing", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/api/financing/stage")
+async def api_update_financing_stage(
+    stage: str = Form(...),
+    username: str = Depends(authenticate_user),
+):
+    """Transitions strategy lifecycle stage (Paper Qualification -> Live Pilot -> Live Active / Suspended / Rejected)."""
+    clean_stage = stage.strip().upper()
+    if clean_stage not in VALID_LIFECYCLE_STAGES:
+        raise HTTPException(status_code=400, detail=f"Invalid lifecycle stage: {stage}")
+    await update_financing_config({"lifecycle_stage": clean_stage})
+    logger.warning("Financing lifecycle stage updated to %s by %s", clean_stage, username)
+    return RedirectResponse(url="/financing", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/api/financing/checks/{check_id}")
+async def api_update_validation_check(
+    check_id: str,
+    status_val: str = Form(..., alias="status"),
+    notes: str = Form(""),
+    username: str = Depends(authenticate_user),
+):
+    """Updates an interactive operational safety sign-off check."""
+    clean_status = status_val.strip().upper()
+    if clean_status not in ("NOT_RUN", "PASSED", "FAILED"):
+        raise HTTPException(status_code=400, detail="Invalid check status")
+    await set_validation_check(check_id.strip().upper(), clean_status, notes)
+    return RedirectResponse(url="/financing", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/api/financing/ledger")
+async def api_add_capital_ledger_entry(
+    flow_type: str = Form(...),
+    amount: float = Form(...),
+    event_date: Optional[str] = Form(None),
+    notes: str = Form(""),
+    username: str = Depends(authenticate_user),
+):
+    """Logs a capital movement (deposit, withdrawal, vault sweep, vault funding) separate from trading P&L."""
+    clean_type = flow_type.strip().upper()
+    if clean_type not in VALID_LEDGER_FLOW_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid flow_type: {flow_type}")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    date_str = (event_date or "").strip() or datetime.now(ZoneInfo(settings.MARKET_TIMEZONE)).strftime("%Y-%m-%d")
+    direction = FLOW_DIRECTIONS.get(clean_type, "EXTERNAL_IN")
+    await add_capital_ledger_entry(
+        event_date=date_str,
+        flow_type=clean_type,
+        amount=round(float(amount), 2),
+        direction=direction,
+        notes=notes.strip(),
+    )
+    return RedirectResponse(url="/financing", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/api/financing/brake/latch")
+async def api_latch_dead_mans_brake(
+    reason: str = Form("Manual operator safety latch"),
+    username: str = Depends(authenticate_user),
+):
+    """Manually latches the Dead Man's Brake (for operational testing or emergency lock)."""
+    await financing_service.latch_dead_mans_brake(f"{reason} (by {username})")
+    return RedirectResponse(url="/financing", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/api/financing/brake/reset")
+async def api_reset_dead_mans_brake(username: str = Depends(authenticate_user)):
+    """Explicitly resets the Dead Man's Brake after operator reconciliation."""
+    await financing_service.reset_dead_mans_brake()
+    return RedirectResponse(url="/financing", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/api/financing/health/reset")
+async def api_reset_health_latch(username: str = Depends(authenticate_user)):
+    """Explicitly resets a latched SUSPENDED/CAPITAL_PROTECTION health state after review."""
+    await financing_service.reset_health_latch()
+    return RedirectResponse(url="/financing", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/api/financing/tax-pnl.csv")
+async def api_export_tax_pnl_csv(username: str = Depends(authenticate_user)):
+    """Downloads realised trading P&L CSV (excluding deposits, withdrawals, and vault sweeps)."""
+    csv_text = await financing_service.build_tax_pnl_csv()
+    today_str = datetime.now(ZoneInfo(settings.MARKET_TIMEZONE)).strftime("%Y-%m-%d")
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="ptrading_realised_pnl_{today_str}.csv"'},
+    )
+
 

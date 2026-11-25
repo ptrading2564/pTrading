@@ -251,6 +251,79 @@ async def init_db() -> None:
             VALUES ('kill_switch', 'OFF');
             """,
         )
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO system_state (key, value)
+            VALUES ('dead_mans_brake', 'OFF');
+            """,
+        )
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO system_state (key, value)
+            VALUES ('dead_mans_brake_reason', '');
+            """,
+        )
+
+        # Financing & Paper-to-Live Qualification configuration (singleton row id = 1)
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS financing_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                strategy_version TEXT NOT NULL DEFAULT 'orb_v1',
+                lifecycle_stage TEXT NOT NULL DEFAULT 'PAPER_QUALIFICATION',
+                risk_profile TEXT NOT NULL DEFAULT 'P2_BALANCED',
+                seed_capital REAL NOT NULL DEFAULT 10000.0,
+                target_capital_goal REAL NOT NULL DEFAULT 50000.0,
+                reserve_pct REAL NOT NULL DEFAULT 20.0,
+                max_live_accessible_capital REAL,
+                pilot_risk_multiplier REAL NOT NULL DEFAULT 0.5,
+                enforcement_enabled INTEGER NOT NULL DEFAULT 1,
+                current_health_state TEXT NOT NULL DEFAULT 'HEALTHY',
+                health_state_latched INTEGER NOT NULL DEFAULT 0,
+                health_state_updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                qual_min_trades INTEGER NOT NULL DEFAULT 30,
+                qual_min_trading_days INTEGER NOT NULL DEFAULT 10,
+                qual_min_expectancy_r REAL NOT NULL DEFAULT 0.15,
+                qual_min_profit_factor REAL NOT NULL DEFAULT 1.30,
+                qual_max_drawdown_pct REAL NOT NULL DEFAULT 10.0,
+                qual_max_avg_slippage_r REAL NOT NULL DEFAULT 0.10,
+                qual_max_ror_20pct REAL NOT NULL DEFAULT 10.0,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        await conn.execute(
+            """
+            INSERT OR IGNORE INTO financing_config (id) VALUES (1);
+            """
+        )
+
+        # Capital Ledger: tracks deposits, withdrawals, vault sweeps & funding (separate from trading P&L)
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS capital_ledger (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_date TEXT NOT NULL,
+                flow_type TEXT NOT NULL,
+                amount REAL NOT NULL,
+                direction TEXT NOT NULL,
+                notes TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
+        # Manual / interactive live-readiness validation checks
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS validation_checks (
+                check_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'NOT_RUN',
+                notes TEXT DEFAULT '',
+                verified_at TIMESTAMP
+            );
+            """
+        )
         await conn.commit()
 
 
@@ -479,3 +552,121 @@ async def get_chartmill_profile(symbol: str, trade_date: Optional[str] = None) -
             )
         ).fetchone()
         return dict(row) if row else None
+
+
+# Financing, Capital Ledger & Validation Check Helpers
+
+
+FINANCING_CONFIG_COLUMNS = {
+    "strategy_version",
+    "lifecycle_stage",
+    "risk_profile",
+    "seed_capital",
+    "target_capital_goal",
+    "reserve_pct",
+    "max_live_accessible_capital",
+    "pilot_risk_multiplier",
+    "enforcement_enabled",
+    "current_health_state",
+    "health_state_latched",
+    "health_state_updated_at",
+    "qual_min_trades",
+    "qual_min_trading_days",
+    "qual_min_expectancy_r",
+    "qual_min_profit_factor",
+    "qual_max_drawdown_pct",
+    "qual_max_avg_slippage_r",
+    "qual_max_ror_20pct",
+}
+
+
+async def get_financing_config() -> Dict[str, Any]:
+    """Returns the singleton financing_config row, creating it if missing."""
+    async with get_connection() as conn:
+        await conn.execute("INSERT OR IGNORE INTO financing_config (id) VALUES (1);")
+        await conn.commit()
+        cursor = await conn.execute("SELECT * FROM financing_config WHERE id = 1;")
+        row = await cursor.fetchone()
+        return dict(row) if row else {}
+
+
+async def update_financing_config(updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Updates allowed columns on the singleton financing_config row."""
+    clean = {k: v for k, v in updates.items() if k in FINANCING_CONFIG_COLUMNS}
+    if not clean:
+        return await get_financing_config()
+
+    set_clauses = [f"{col} = ?" for col in clean]
+    set_clauses.append("updated_at = CURRENT_TIMESTAMP")
+    params = list(clean.values())
+
+    async with get_connection() as conn:
+        await conn.execute("INSERT OR IGNORE INTO financing_config (id) VALUES (1);")
+        await conn.execute(
+            f"UPDATE financing_config SET {', '.join(set_clauses)} WHERE id = 1;",
+            params,
+        )
+        await conn.commit()
+        cursor = await conn.execute("SELECT * FROM financing_config WHERE id = 1;")
+        row = await cursor.fetchone()
+        return dict(row) if row else {}
+
+
+async def add_capital_ledger_entry(
+    event_date: str,
+    flow_type: str,
+    amount: float,
+    direction: str,
+    notes: str = "",
+) -> int:
+    """Inserts a capital movement into capital_ledger and returns its row id."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            """
+            INSERT INTO capital_ledger (event_date, flow_type, amount, direction, notes)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            (event_date, flow_type, float(amount), direction, notes or ""),
+        )
+        await conn.commit()
+        return int(cursor.lastrowid)
+
+
+async def get_capital_ledger(limit: int = 200) -> List[Dict[str, Any]]:
+    """Returns capital ledger entries ordered newest first."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            "SELECT * FROM capital_ledger ORDER BY event_date DESC, id DESC LIMIT ?;",
+            (limit,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+
+async def get_validation_checks() -> Dict[str, Dict[str, Any]]:
+    """Returns stored manual validation checks keyed by check_id."""
+    async with get_connection() as conn:
+        cursor = await conn.execute("SELECT * FROM validation_checks;")
+        return {row["check_id"]: dict(row) for row in await cursor.fetchall()}
+
+
+async def set_validation_check(check_id: str, status: str, notes: str = "") -> Dict[str, Any]:
+    """Upserts a manual live-readiness validation check status."""
+    verified_at = datetime.now(timezone.utc).isoformat() if status == "PASSED" else None
+    async with get_connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO validation_checks (check_id, status, notes, verified_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(check_id) DO UPDATE SET
+                status = excluded.status,
+                notes = excluded.notes,
+                verified_at = excluded.verified_at;
+            """,
+            (check_id, status, notes or "", verified_at),
+        )
+        await conn.commit()
+        cursor = await conn.execute(
+            "SELECT * FROM validation_checks WHERE check_id = ?;", (check_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else {"check_id": check_id, "status": status, "notes": notes}

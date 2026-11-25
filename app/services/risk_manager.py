@@ -10,6 +10,7 @@ import logging
 from app.brokers.base import BrokerAdapter
 from app.config import settings
 from app.db import get_connection
+from app.services.financing_service import financing_service
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,9 @@ class RiskEvaluation:
     risk_dollars: float
     stop_distance: float
     stop_type: str = "ATR_1_5"
+    health_state: str = "HEALTHY"
+    risk_multiplier: float = 1.0
+    effective_equity: float = 0.0
 
 
 class RiskManager:
@@ -131,6 +135,23 @@ class RiskManager:
                 stop_distance=0.0,
             )
 
+        # 2b. Financing Governance: Dead Man's Brake, Health-State Drawdown Ladder, Stage & Live Ceiling
+        controls = await financing_service.get_effective_risk_controls(equity)
+        if not controls.allowed:
+            return RiskEvaluation(
+                approved=False,
+                rejection_reason=controls.block_reason or "Financing governance blocked new entry.",
+                qty=0,
+                entry_limit_price=close_price,
+                stop_loss_price=0.0,
+                take_profit_price=0.0,
+                risk_dollars=0.0,
+                stop_distance=0.0,
+                health_state=controls.health_state,
+                risk_multiplier=controls.combined_risk_multiplier,
+                effective_equity=controls.effective_equity,
+            )
+
         # 3. Check Max Concurrent Positions Cap (Max 4)
         positions = await self.broker.get_positions()
         # Also check if we already hold or have pending orders for this symbol
@@ -227,12 +248,13 @@ class RiskManager:
                 stop_distance=stop_distance,
             )
 
-        # 5. Position Sizing: 0.5% live equity risked per trade
-        risk_dollars = equity * (settings.RISK_PERCENT_PER_TRADE / 100.0)
+        # 5. Position Sizing: risk-first sizing governed by Financing effective equity & health/pilot multipliers
+        effective_equity = controls.effective_equity
+        risk_dollars = round(effective_equity * (controls.effective_risk_pct / 100.0), 2)
         raw_shares = floor(risk_dollars / stop_distance)
 
         # 6. Max 25% single stock allocation cap + live buying-power safety check
-        max_capital_for_stock = equity * (settings.MAX_EQUITY_PERCENT_PER_STOCK / 100.0)
+        max_capital_for_stock = effective_equity * (settings.MAX_EQUITY_PERCENT_PER_STOCK / 100.0)
         max_allowed_shares = floor(max_capital_for_stock / entry_limit_price)
 
         shares = min(raw_shares, max_allowed_shares)
@@ -251,6 +273,9 @@ class RiskManager:
                 take_profit_price=0.0,
                 risk_dollars=risk_dollars,
                 stop_distance=stop_distance,
+                health_state=controls.health_state,
+                risk_multiplier=controls.combined_risk_multiplier,
+                effective_equity=effective_equity,
             )
 
         # 7. Take-Profit: +2.0R
@@ -266,4 +291,7 @@ class RiskManager:
             risk_dollars=risk_dollars,
             stop_distance=stop_distance,
             stop_type=stop_type,
+            health_state=controls.health_state,
+            risk_multiplier=controls.combined_risk_multiplier,
+            effective_equity=effective_equity,
         )

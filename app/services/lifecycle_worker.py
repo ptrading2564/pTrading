@@ -10,6 +10,7 @@ from app.brokers.base import BrokerAdapter
 from app.config import settings
 from app.db import get_connection, get_system_state, save_daily_report, set_system_state
 from app.services.analytics_service import analytics_service
+from app.services.financing_service import financing_service
 from app.services.strategy_reviewer import strategy_reviewer
 from app.services.telegram_bot import telegram
 
@@ -223,8 +224,11 @@ class LifecycleWorker:
             else:
                 rem_list = ", ".join(sorted(remaining_symbols))
                 logger.error("EOD Flatten incomplete! Still open at broker: %s", rem_list)
+                await financing_service.latch_dead_mans_brake(
+                    f"EOD Flatten incomplete: {len(remaining)} position(s) still open ({rem_list})."
+                )
                 await telegram.send_message(
-                    f"⚠️ <b>EOD Flatten Warning:</b> {len(remaining)} position(s) still open at Alpaca: <code>{rem_list}</code>. Will retry."
+                    f"⚠️ <b>EOD Flatten Warning (Dead Man's Brake Latched):</b> {len(remaining)} position(s) still open at Alpaca: <code>{rem_list}</code>. Reconcile & reset on /financing."
                 )
 
     async def _finalize_closed_trade(
@@ -576,12 +580,19 @@ class LifecycleWorker:
     async def start(self, poll_interval_seconds: float = 5.0) -> None:
         """Starts the infinite background lifecycle monitor loop."""
         self.is_running = True
+        consecutive_errors = 0
         logger.info("LifecycleWorker started with %.1fs polling interval", poll_interval_seconds)
         while self.is_running:
             try:
                 await self.run_iteration()
+                consecutive_errors = 0
             except Exception as e:
-                logger.error("Unhandled error in LifecycleWorker loop: %s", e)
+                consecutive_errors += 1
+                logger.error("Unhandled error in LifecycleWorker loop (%d consecutive): %s", consecutive_errors, e)
+                if consecutive_errors >= 5:
+                    await financing_service.latch_dead_mans_brake(
+                        f"LifecycleWorker hit {consecutive_errors} consecutive loop failures: {e}"
+                    )
             await asyncio.sleep(poll_interval_seconds)
 
     def stop(self) -> None:
