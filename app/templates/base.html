@@ -48,10 +48,11 @@
           <span id="header-clock-et" class="text-slate-400 font-mono">{{ current_time_et }} ET</span>
         </div>
 
+        {% set cur_path = request.url.path if request else '/' %}
         <nav class="flex items-center gap-1.5 text-sm">
-          <a href="/" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-200 transition font-medium">Dashboard</a>
-          <a href="/analytics" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition font-medium">Analytics</a>
-          <a href="/financing" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition font-medium">Financing</a>
+          <a href="/" class="px-3 py-1.5 rounded-md hover:bg-slate-700 transition font-medium {% if cur_path == '/' %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Dashboard</a>
+          <a href="/analytics" class="px-3 py-1.5 rounded-md hover:bg-slate-700 transition font-medium {% if cur_path.startswith('/analytics') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Analytics</a>
+          <a href="/financing" class="px-3 py-1.5 rounded-md hover:bg-slate-700 transition font-medium {% if cur_path.startswith('/financing') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Financing</a>
           <a href="/health" target="_blank" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition font-medium">Health</a>
         </nav>
 

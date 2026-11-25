@@ -604,6 +604,7 @@ class FinancingService:
         ledger: List[Dict[str, Any]],
         cum_metrics: Dict[str, Any],
         projections: Dict[str, Any],
+        cumulative_roi_pct: float = 0.0,
     ) -> Dict[str, Any]:
         """Computes Seed -> Goal progress, Protected Vault vs Broker split, Sweep suggestions & ETA."""
         seed = max(0.0, float(config.get("seed_capital") or 10000.0))
@@ -611,6 +612,8 @@ class FinancingService:
         reserve_pct = max(0.0, min(90.0, float(config.get("reserve_pct") or 20.0)))
         max_live_cap = config.get("max_live_accessible_capital")
         max_live_cap_val = float(max_live_cap) if (max_live_cap is not None and float(max_live_cap) > 0) else None
+        lifecycle_stage = str(config.get("lifecycle_stage") or "PAPER_QUALIFICATION")
+        is_live_wealth_mode = (not settings.ALPACA_PAPER) or (lifecycle_stage in ("LIVE_PILOT", "LIVE_ACTIVE"))
 
         # Compute External Protected Vault balance and net external deposits from Capital Ledger
         vault_balance = 0.0
@@ -631,7 +634,13 @@ class FinancingService:
 
         vault_balance = round(vault_balance, 2)
         broker_eq = round(max(0.0, float(broker_equity)), 2)
-        total_wealth = round(broker_eq + vault_balance, 2)
+
+        if is_live_wealth_mode:
+            total_wealth = round(broker_eq + vault_balance, 2)
+        else:
+            # Paper preview mode: project cumulative TWR % onto configured Seed Capital
+            # so a $100k Alpaca paper account doesn't distort a smaller live seed->goal bar
+            total_wealth = round(max(0.0, seed * (1.0 + (float(cumulative_roi_pct) / 100.0))) + vault_balance, 2)
 
         # Progress from Seed -> Goal
         span = goal - seed
@@ -639,25 +648,26 @@ class FinancingService:
         progress_pct = round(max(0.0, min(100.0, (gained / span) * 100.0)), 1) if span > 0 else 0.0
         remaining_to_goal = round(max(0.0, goal - total_wealth), 2)
 
-        # Protected Vault target & Surplus Sweep suggestion
+        # Protected Vault target & Surplus Sweep suggestion (live mode only)
         target_vault = round(total_wealth * (reserve_pct / 100.0), 2)
         target_deployable = round(total_wealth - target_vault, 2)
         actual_vault_pct = round((vault_balance / total_wealth) * 100.0, 1) if total_wealth > 0 else 0.0
 
         sweep_suggestion = 0.0
         sweep_reason = ""
-        if max_live_cap_val is not None and broker_eq > max_live_cap_val:
-            sweep_suggestion = round(broker_eq - max_live_cap_val, 2)
-            sweep_reason = (
-                f"Broker equity (${broker_eq:,.2f}) exceeds Maximum Live Accessible Capital "
-                f"(${max_live_cap_val:,.2f}). Sweep surplus to Protected Vault."
-            )
-        elif vault_balance < target_vault and (target_vault - vault_balance) >= max(250.0, total_wealth * 0.05):
-            sweep_suggestion = round(target_vault - vault_balance, 2)
-            sweep_reason = (
-                f"Protected Vault is {actual_vault_pct:.1f}% vs. {reserve_pct:.0f}% target. "
-                f"Consider sweeping ${sweep_suggestion:,.2f} from broker to vault."
-            )
+        if is_live_wealth_mode:
+            if max_live_cap_val is not None and broker_eq > max_live_cap_val:
+                sweep_suggestion = round(broker_eq - max_live_cap_val, 2)
+                sweep_reason = (
+                    f"Broker equity (${broker_eq:,.2f}) exceeds Maximum Live Accessible Capital "
+                    f"(${max_live_cap_val:,.2f}). Sweep surplus to Protected Vault."
+                )
+            elif vault_balance < target_vault and (target_vault - vault_balance) >= max(250.0, total_wealth * 0.05):
+                sweep_suggestion = round(target_vault - vault_balance, 2)
+                sweep_reason = (
+                    f"Protected Vault is {actual_vault_pct:.1f}% vs. {reserve_pct:.0f}% target. "
+                    f"Consider sweeping ${sweep_suggestion:,.2f} from broker to vault."
+                )
 
         # Geometric ETA to Goal using observed expectancy & trade frequency
         eta_trading_days: Optional[int] = None
@@ -675,6 +685,7 @@ class FinancingService:
                 eta_months = round(eta_trading_days / 21.0, 1)
 
         return {
+            "is_live_wealth_mode": is_live_wealth_mode,
             "seed_capital": round(seed, 2),
             "target_capital_goal": round(goal, 2),
             "broker_equity": broker_eq,
@@ -687,7 +698,7 @@ class FinancingService:
             "target_vault_balance": target_vault,
             "target_deployable_capital": target_deployable,
             "max_live_accessible_capital": max_live_cap_val,
-            "ceiling_exceeded": bool(max_live_cap_val is not None and broker_eq > max_live_cap_val),
+            "ceiling_exceeded": bool(is_live_wealth_mode and max_live_cap_val is not None and broker_eq > max_live_cap_val),
             "surplus_sweep_suggestion": sweep_suggestion,
             "surplus_sweep_reason": sweep_reason,
             "total_deposits": round(total_deposits, 2),
@@ -726,6 +737,7 @@ class FinancingService:
             ledger=ledger,
             cum_metrics=cum,
             projections=projections,
+            cumulative_roi_pct=float(roi.get("cumulative_roi_pct") or 0.0),
         )
 
         # Realised trading P&L summary (strictly separate from capital_ledger flows)

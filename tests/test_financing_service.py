@@ -206,6 +206,7 @@ async def test_qualification_verdicts():
 async def test_wealth_custody_ledger_and_tax_csv():
     await update_financing_config(
         {
+            "lifecycle_stage": "LIVE_ACTIVE",
             "seed_capital": 10000.0,
             "target_capital_goal": 50000.0,
             "reserve_pct": 20.0,

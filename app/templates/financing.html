@@ -103,7 +103,7 @@
           <div class="bg-slate-800/70 rounded-lg p-2">
             <div class="text-[10px] text-slate-400">Current DD</div>
             <div class="text-sm font-bold {% if controls.current_drawdown_pct >= 10 %}text-rose-400{% elif controls.current_drawdown_pct >= 5 %}text-amber-300{% else %}text-emerald-400{% endif %}">
-              -{{ "%.2f"|format(controls.current_drawdown_pct) }}%
+              {% if controls.current_drawdown_pct > 0 %}-{{ "%.2f"|format(controls.current_drawdown_pct) }}%{% else %}0.00%{% endif %}
             </div>
           </div>
           <div class="bg-slate-800/70 rounded-lg p-2">
@@ -273,7 +273,9 @@
       <div class="bg-slate-900/80 border border-slate-700/70 rounded-xl p-4 space-y-2.5">
         <div class="flex items-baseline justify-between">
           <div>
-            <div class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Total Programme Wealth</div>
+            <div class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">
+              {{ "Total Programme Wealth" if wealth.is_live_wealth_mode else "Simulated Seed Wealth (Paper ROI Preview)" }}
+            </div>
             <div class="text-2xl font-mono font-extrabold text-white">${{ "{:,.2f}".format(wealth.total_programme_wealth) }}</div>
           </div>
           <div class="text-right">
@@ -289,6 +291,11 @@
           <span class="text-emerald-300 font-bold">{{ "%.1f"|format(wealth.progress_pct) }}% Complete</span>
           <span>Remaining: ${{ "{:,.0f}".format(wealth.remaining_to_goal) }}</span>
         </div>
+        {% if not wealth.is_live_wealth_mode %}
+        <div class="text-[11px] text-slate-400 pt-1 border-t border-slate-800">
+          Paper mode: showing your cumulative paper ROI applied to your configured Seed Capital. Switches automatically to live broker + vault custody when promoted to Live Pilot / Live Active.
+        </div>
+        {% endif %}
       </div>
 
       <!-- Vault vs. Broker Execution Perimeter -->
@@ -433,8 +440,9 @@
       <div class="flex flex-wrap items-center gap-3">
         <div class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono">
           Realised Trading P&amp;L ({{ summary.realised_tax_pnl.total_closed_trades }} trades):
-          <strong class="{% if summary.realised_tax_pnl.net_realised_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-            ${{ "{:+,.2f}".format(summary.realised_tax_pnl.net_realised_pnl) }}
+          {% set rpnl = summary.realised_tax_pnl.net_realised_pnl %}
+          <strong class="{% if rpnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+            {{ "+" if rpnl > 0 else ("-" if rpnl < 0 else "") }}${{ "{:,.2f}".format(rpnl|abs) }}
           </strong>
         </div>
         <a href="/api/financing/tax-pnl.csv" class="px-3.5 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition">
