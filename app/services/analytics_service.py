@@ -1116,72 +1116,71 @@ class AnalyticsService:
             )
             trades = [dict(r) for r in await cursor.fetchall()]
 
-        if not trades:
-            return
+        if trades:
+            symbols = sorted({t["symbol"] for t in trades})
+            bars_by_sym: Dict[str, List[Any]] = {}
+            try:
+                bars_by_sym = await scanner.fetch_bars_multi(symbols, session_start, session_end)
+            except Exception as e:
+                logger.warning("EOD trade bar fetch failed: %s", e)
 
-        symbols = sorted({t["symbol"] for t in trades})
-        try:
-            bars_by_sym = await scanner.fetch_bars_multi(symbols, session_start, session_end)
-        except Exception as e:
-            logger.warning("EOD trade bar fetch failed: %s", e)
-            return
+            if bars_by_sym:
+                async with get_connection() as conn:
+                    for t in trades:
+                        bars = bars_by_sym.get(t["symbol"], [])
+                        if not bars:
+                            continue
+                        entry_p = float(t["entry_price"])
+                        init_stop = float(t.get("initial_stop_price") or t["stop_loss_price"])
+                        risk_1r = entry_p - init_stop
+                        if risk_1r <= 0:
+                            continue
 
-        async with get_connection() as conn:
-            for t in trades:
-                bars = bars_by_sym.get(t["symbol"], [])
-                if not bars:
-                    continue
-                entry_p = float(t["entry_price"])
-                init_stop = float(t.get("initial_stop_price") or t["stop_loss_price"])
-                risk_1r = entry_p - init_stop
-                if risk_1r <= 0:
-                    continue
+                        entry_dt = _parse_iso_dt(t.get("entry_time"))
+                        exit_dt = _parse_iso_dt(t.get("exit_time"))
+                        if entry_dt and entry_dt.tzinfo is None:
+                            entry_dt = entry_dt.replace(tzinfo=ZoneInfo("UTC"))
+                        if exit_dt and exit_dt.tzinfo is None:
+                            exit_dt = exit_dt.replace(tzinfo=ZoneInfo("UTC"))
 
-                entry_dt = _parse_iso_dt(t.get("entry_time"))
-                exit_dt = _parse_iso_dt(t.get("exit_time"))
-                if entry_dt and entry_dt.tzinfo is None:
-                    entry_dt = entry_dt.replace(tzinfo=ZoneInfo("UTC"))
-                if exit_dt and exit_dt.tzinfo is None:
-                    exit_dt = exit_dt.replace(tzinfo=ZoneInfo("UTC"))
+                        during_bars = []
+                        after_bars = []
+                        for b in bars:
+                            bt = b.timestamp
+                            if bt.tzinfo is None:
+                                bt = bt.replace(tzinfo=ZoneInfo("UTC"))
+                            if entry_dt and bt < entry_dt - timedelta(minutes=5):
+                                continue
+                            if exit_dt and bt > exit_dt + timedelta(minutes=5):
+                                after_bars.append(b)
+                            else:
+                                during_bars.append(b)
 
-                during_bars = []
-                after_bars = []
-                for b in bars:
-                    bt = b.timestamp
-                    if bt.tzinfo is None:
-                        bt = bt.replace(tzinfo=ZoneInfo("UTC"))
-                    if entry_dt and bt < entry_dt - timedelta(minutes=5):
-                        continue
-                    if exit_dt and bt > exit_dt + timedelta(minutes=5):
-                        after_bars.append(b)
-                    else:
-                        during_bars.append(b)
+                        if during_bars:
+                            max_h = max(float(b.high) for b in during_bars)
+                            min_l = min(float(b.low) for b in during_bars)
+                            mfe_r = round((max_h - entry_p) / risk_1r, 3)
+                            mae_r = round((entry_p - min_l) / risk_1r, 3)
+                        else:
+                            mfe_r = None
+                            mae_r = None
 
-                if during_bars:
-                    max_h = max(float(b.high) for b in during_bars)
-                    min_l = min(float(b.low) for b in during_bars)
-                    mfe_r = round((max_h - entry_p) / risk_1r, 3)
-                    mae_r = round((entry_p - min_l) / risk_1r, 3)
-                else:
-                    mfe_r = None
-                    mae_r = None
+                        post_max_r = None
+                        if after_bars:
+                            post_h = max(float(b.high) for b in after_bars)
+                            post_max_r = round((post_h - entry_p) / risk_1r, 3)
 
-                post_max_r = None
-                if after_bars:
-                    post_h = max(float(b.high) for b in after_bars)
-                    post_max_r = round((post_h - entry_p) / risk_1r, 3)
+                        await conn.execute(
+                            """
+                            UPDATE trades
+                            SET mfe_r = ?, mae_r = ?, post_exit_max_r = ?
+                            WHERE id = ?;
+                            """,
+                            (mfe_r, mae_r, post_max_r, t["id"]),
+                        )
+                    await conn.commit()
 
-                await conn.execute(
-                    """
-                    UPDATE trades
-                    SET mfe_r = ?, mae_r = ?, post_exit_max_r = ?
-                    WHERE id = ?;
-                    """,
-                    (mfe_r, mae_r, post_max_r, t["id"]),
-                )
-            await conn.commit()
-
-        # 3. Evaluate counterfactual outcomes for REJECTED signals on report_date
+        # 3. Evaluate counterfactual outcomes for REJECTED signals on report_date (always runs)
         await self.enrich_missed_signals_counterfactual(report_date)
 
     async def enrich_missed_signals_counterfactual(self, report_date: str) -> int:
