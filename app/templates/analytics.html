@@ -302,8 +302,8 @@
   {% endif %}
 
   <!-- Missed / Rejected Signals Counterfactual Audit -->
-  {% set missed = report.missed_signals_audit %}
-  {% if missed and missed.total_rejected > 0 %}
+  {% set missed = report.get('missed_signals_audit') %}
+  {% if missed and missed.get('total_rejected', 0) > 0 %}
   <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
     <div class="p-4 border-b border-slate-700/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
       <div>
@@ -334,7 +334,7 @@
           </tr>
         </thead>
         <tbody class="divide-y divide-slate-700/40 font-mono">
-          {% for ms in missed.items %}
+          {% for ms in missed.get('items', []) %}
           <tr class="hover:bg-slate-700/20 transition">
             <td class="py-2.5 px-4 text-slate-400 whitespace-nowrap">{{ ms.time_et }}</td>
             <td class="py-2.5 px-4 font-bold">
