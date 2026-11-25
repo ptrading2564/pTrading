@@ -131,7 +131,7 @@ class ChartMillImporter:
         # Identify key columns (supports both verbose names and ChartMill's compact headers: TA, FA, CRS, ADR(20)%, etc.)
         ticker_col = next((header_map[k] for k in header_map if k in ("ticker", "symbol")), None)
         price_col = next((header_map[k] for k in header_map if k in ("price", "close", "last", "last_price")), None)
-        atr_col = next((header_map[k] for k in header_map if "atr" in k), None)
+        atr_col = next((header_map[k] for k in header_map if "atr" in k or "average_true_range" in k), None)
         adr_col = next((header_map[k] for k in header_map if "adr" in k or "average_daily_range" in k), None)
         sr_col = next((header_map[k] for k in header_map if "setup" in k), None)
         tr_col = next((header_map[k] for k in header_map if "tech" in k or k == "ta"), None)
