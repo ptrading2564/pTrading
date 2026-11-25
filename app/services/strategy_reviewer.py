@@ -559,12 +559,17 @@ class StrategyReviewer:
 
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{settings.GEMINI_MODEL}:generateContent?key={settings.GEMINI_API_KEY}"
+            f"{settings.GEMINI_MODEL}:generateContent"
         )
+        headers = {
+            "x-goog-api-key": settings.GEMINI_API_KEY.strip(),
+            "Content-Type": "application/json",
+        }
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=35.0) as client:
                 res = await client.post(
                     url,
+                    headers=headers,
                     json={"contents": [{"parts": [{"text": prompt}]}]},
                 )
                 if res.status_code == 200:
@@ -578,7 +583,11 @@ class StrategyReviewer:
                     )
                     if text:
                         return text, "gemini", diagnostics
-                logger.warning("Gemini API returned status %d; falling back to deterministic review.", res.status_code)
+                logger.warning(
+                    "Gemini API returned status %d (%s); falling back to deterministic review.",
+                    res.status_code,
+                    res.text[:300],
+                )
         except Exception as e:
             logger.warning("Gemini strategy review call failed (%s); falling back to deterministic review.", e)
 
