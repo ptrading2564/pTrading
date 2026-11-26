@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 
@@ -100,3 +100,13 @@ class BrokerAdapter(ABC):
     async def get_closed_orders(self, after: Optional[datetime] = None) -> List[OrderInfo]:
         """Fetches closed/filled orders (with nested legs) for exit price reconciliation."""
         return []
+
+    async def get_market_calendar(self, start_date: date, end_date: date) -> List[Dict[str, str]]:
+        """Returns NYSE trading days [{'date': 'YYYY-MM-DD', 'open': '09:30', 'close': '16:00'}]."""
+        days: List[Dict[str, str]] = []
+        cur = start_date
+        while cur <= end_date:
+            if cur.weekday() < 5:
+                days.append({"date": cur.strftime("%Y-%m-%d"), "open": "09:30", "close": "16:00"})
+            cur += timedelta(days=1)
+        return days

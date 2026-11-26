@@ -3,6 +3,28 @@
 {% block content %}
 <div class="space-y-6">
 
+  {% if upcoming_alerts %}
+  <!-- Upcoming Market Calendar Alert Banner (Today / Tomorrow) -->
+  <div class="bg-amber-500/10 border border-amber-500/40 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 shadow">
+    <div class="flex flex-wrap items-center gap-2 text-xs">
+      {% for al in upcoming_alerts %}
+      <span class="px-2 py-0.5 rounded font-bold uppercase text-[10px]
+        {% if al.category == 'HOLIDAY' %}bg-rose-500/20 text-rose-300 border border-rose-500/40
+        {% elif al.category == 'EARLY_CLOSE' %}bg-amber-500/20 text-amber-300 border border-amber-500/40
+        {% else %}bg-purple-500/20 text-purple-300 border border-purple-500/40{% endif %}">
+        {{ al.when_label }}
+      </span>
+      <span class="font-semibold text-white">{{ al.title }}</span>
+      <span class="text-slate-300">&mdash; {{ al.notes }}</span>
+      {% if not loop.last %}<span class="text-slate-600 mx-1">|</span>{% endif %}
+      {% endfor %}
+    </div>
+    <a href="/calendar" class="text-xs font-semibold text-amber-300 hover:text-amber-200 whitespace-nowrap transition">
+      View Calendar &rarr;
+    </a>
+  </div>
+  {% endif %}
+
   <!-- Control & Status Banner -->
   <div class="bg-slate-800/90 border border-slate-700/80 rounded-xl p-5 shadow-lg flex flex-col md:flex-row items-center justify-between gap-4">
     <!-- Execution Mode Selector -->

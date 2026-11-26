@@ -10,6 +10,7 @@ from app.brokers.base import BrokerAdapter
 from app.config import settings
 from app.db import get_connection, get_system_state, save_daily_report, set_system_state
 from app.services.analytics_service import analytics_service
+from app.services.calendar_service import CalendarService
 from app.services.financing_service import financing_service
 from app.services.strategy_reviewer import strategy_reviewer
 from app.services.telegram_bot import telegram
@@ -23,6 +24,7 @@ class LifecycleWorker:
     def __init__(self, broker: BrokerAdapter) -> None:
         self.broker = broker
         self.tz = ZoneInfo(settings.MARKET_TIMEZONE)
+        self.calendar = CalendarService(broker=broker)
         self.is_running = False
 
     async def step_breakeven_if_earned(self) -> None:
@@ -549,6 +551,10 @@ class LifecycleWorker:
 
         last_report_sent = await get_system_state("daily_report_sent")
         if last_report_sent == today_str:
+            return
+
+        # Skip automated EOD report on weekends and NYSE market holidays (e.g. Thanksgiving)
+        if not await self.calendar.is_trading_day(now_et.date()):
             return
 
         try:

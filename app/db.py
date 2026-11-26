@@ -175,6 +175,22 @@ async def init_db() -> None:
             """
         )
 
+        # Custom user calendar events table
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS calendar_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_date TEXT NOT NULL,
+                event_time_et TEXT DEFAULT 'ALL_DAY',
+                title TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'CUSTOM',
+                impact TEXT NOT NULL DEFAULT 'MEDIUM',
+                notes TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
         # Idempotent migrations for existing databases
         await _ensure_columns(
             conn,
@@ -552,6 +568,48 @@ async def get_chartmill_profile(symbol: str, trade_date: Optional[str] = None) -
             )
         ).fetchone()
         return dict(row) if row else None
+
+
+async def add_calendar_event(
+    event_date: str,
+    title: str,
+    event_time_et: str = "ALL_DAY",
+    category: str = "CUSTOM",
+    impact: str = "MEDIUM",
+    notes: Optional[str] = None,
+) -> int:
+    """Inserts a custom trading calendar event or reminder."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            """
+            INSERT INTO calendar_events (event_date, event_time_et, title, category, impact, notes)
+            VALUES (?, ?, ?, ?, ?, ?);
+            """,
+            (event_date, event_time_et or "ALL_DAY", title.strip(), category.upper(), impact.upper(), notes),
+        )
+        await conn.commit()
+        return int(cursor.lastrowid)
+
+
+async def delete_calendar_event(event_id: int) -> None:
+    """Deletes a custom calendar event by ID."""
+    async with get_connection() as conn:
+        await conn.execute("DELETE FROM calendar_events WHERE id = ?;", (event_id,))
+        await conn.commit()
+
+
+async def get_calendar_events(start_date: str, end_date: str) -> List[Dict[str, Any]]:
+    """Returns custom calendar events within [start_date, end_date]."""
+    async with get_connection() as conn:
+        cursor = await conn.execute(
+            """
+            SELECT * FROM calendar_events
+            WHERE event_date >= ? AND event_date <= ?
+            ORDER BY event_date ASC, event_time_et ASC;
+            """,
+            (start_date, end_date),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
 
 
 # Financing, Capital Ledger & Validation Check Helpers

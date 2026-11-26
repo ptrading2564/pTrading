@@ -23,7 +23,9 @@ import logging
 from app.brokers.alpaca_adapter import AlpacaAdapter
 from app.config import ExecutionMode, settings
 from app.db import (
+    add_calendar_event,
     add_capital_ledger_entry,
+    delete_calendar_event,
     get_chartmill_profile,
     get_connection,
     get_daily_report,
@@ -37,6 +39,7 @@ from app.db import (
     update_financing_config,
 )
 from app.services.analytics_service import analytics_service
+from app.services.calendar_service import CalendarService
 from app.services.chartmill_importer import chartmill_importer
 from app.services.financing_service import (
     FLOW_DIRECTIONS,
@@ -69,6 +72,7 @@ templates = Jinja2Templates(directory=str(templates_path))
 
 broker = AlpacaAdapter()
 risk_manager = RiskManager(broker)
+calendar_service = CalendarService(broker=broker)
 
 
 def _is_valid_username(username: str) -> bool:
@@ -567,6 +571,12 @@ async def dashboard_home(
         logger.warning("Error fetching financing controls for dashboard: %s", e)
         financing_controls = None
 
+    try:
+        upcoming_alerts = await calendar_service.get_upcoming_alerts()
+    except Exception as e:
+        logger.debug("Calendar alerts lookup skipped: %s", e)
+        upcoming_alerts = []
+
     user_info = getattr(request.state, "user", None) or {
         "user": username,
         "name": username.split("@")[0].capitalize(),
@@ -579,6 +589,7 @@ async def dashboard_home(
         context={
             "user": user_info,
             "username": username,
+            "upcoming_alerts": upcoming_alerts,
             "equity": equity,
             "starting_equity": starting_equity,
             "daily_pnl": daily_pnl,
@@ -1118,6 +1129,90 @@ async def get_symbol_chart_data(
             "chartmill_fa_url": f"https://www.chartmill.com/stock/quote/{clean_sym}/fundamental-analysis",
         }
     )
+
+
+@router.get("/calendar", response_class=HTMLResponse)
+async def calendar_page(
+    request: Request,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    username: str = Depends(authenticate_user),
+):
+    """Interactive Market Calendar showing NYSE holidays, early closes, macro events, and basket earnings."""
+    tz = ZoneInfo(settings.MARKET_TIMEZONE)
+    now_et = datetime.now(tz)
+    try:
+        is_market_open = await broker.is_market_open()
+    except Exception:
+        is_market_open = False
+
+    cal_data = await calendar_service.get_month_view(year=year, month=month)
+    user_info = getattr(request.state, "user", None) or {
+        "user": username,
+        "name": username.split("@")[0].capitalize(),
+        "avatar": "",
+    }
+
+    return templates.TemplateResponse(
+        request=request,
+        name="calendar.html",
+        context={
+            "user": user_info,
+            "username": username,
+            "cal": cal_data,
+            "is_market_open": is_market_open,
+            "current_time_et": now_et.strftime("%H:%M:%S"),
+        },
+    )
+
+
+@router.get("/api/calendar/events")
+async def get_calendar_events_api(
+    days: int = 60,
+    username: str = Depends(authenticate_user),
+):
+    """Returns upcoming NYSE holidays, early closes, macro catalysts, earnings, and custom events."""
+    tz = ZoneInfo(settings.MARKET_TIMEZONE)
+    today = datetime.now(tz).date()
+    days_clamped = max(1, min(days, 365))
+    events = await calendar_service.get_events_in_range(today, today + timedelta(days=days_clamped))
+    return JSONResponse(content={"from": today.strftime("%Y-%m-%d"), "days": days_clamped, "events": events})
+
+
+@router.post("/api/calendar/events")
+async def create_calendar_event_endpoint(
+    event_date: str = Form(...),
+    title: str = Form(...),
+    event_time_et: str = Form("ALL_DAY"),
+    category: str = Form("CUSTOM"),
+    impact: str = Form("MEDIUM"),
+    notes: str = Form(""),
+    username: str = Depends(authenticate_user),
+):
+    """Adds a custom trading event or reminder to the calendar."""
+    await add_calendar_event(
+        event_date=event_date.strip(),
+        title=title.strip(),
+        event_time_et=event_time_et.strip() or "ALL_DAY",
+        category=category.strip() or "CUSTOM",
+        impact=impact.strip() or "MEDIUM",
+        notes=notes.strip() or None,
+    )
+    try:
+        d = datetime.strptime(event_date.strip(), "%Y-%m-%d").date()
+        return RedirectResponse(url=f"/calendar?year={d.year}&month={d.month}", status_code=status.HTTP_303_SEE_OTHER)
+    except ValueError:
+        return RedirectResponse(url="/calendar", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/api/calendar/events/{event_id}/delete")
+async def delete_calendar_event_endpoint(
+    event_id: int,
+    username: str = Depends(authenticate_user),
+):
+    """Removes a custom calendar event."""
+    await delete_calendar_event(event_id)
+    return RedirectResponse(url="/calendar", status_code=status.HTTP_303_SEE_OTHER)
 
 
 # ---------------------------------------------------------------------------

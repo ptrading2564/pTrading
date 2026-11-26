@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+  <!-- Header & Month Navigation -->
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-700/60 pb-4">
+    <div>
+      <h1 class="text-xl font-bold text-white">Market Calendar & Upcoming Events</h1>
+      <p class="text-xs text-slate-400 mt-1">
+        Official NYSE Holidays & Early Closes (Alpaca) &bull; US Macro Catalysts (FOMC, CPI, NFP, OpEx) &bull; Active ChartMill Basket Earnings
+      </p>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <a href="/calendar?year={{ cal.prev_year }}&month={{ cal.prev_month }}" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition">
+        &larr; Prev
+      </a>
+      <a href="/calendar" class="px-3 py-1.5 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-300 text-xs font-semibold transition">
+        {{ cal.month_name }}
+      </a>
+      <a href="/calendar?year={{ cal.next_year }}&month={{ cal.next_month }}" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold transition">
+        Next &rarr;
+      </a>
+    </div>
+  </div>
+
+  <!-- Top Summary Strip -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+    <!-- Next NYSE Holiday -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-rose-400 font-bold">Next NYSE Holiday</div>
+      {% if cal.next_holiday %}
+      <div class="mt-1 text-sm font-bold text-white font-mono">{{ cal.next_holiday.date }}</div>
+      <div class="text-xs text-slate-300 mt-0.5 truncate" title="{{ cal.next_holiday.title }}">{{ cal.next_holiday.title }}</div>
+      {% else %}
+      <div class="mt-1 text-sm text-slate-400">None in next 60 days</div>
+      {% endif %}
+    </div>
+
+    <!-- Next Early Close -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-amber-400 font-bold">Next Early Close</div>
+      {% if cal.next_early_close %}
+      <div class="mt-1 text-sm font-bold text-white font-mono">{{ cal.next_early_close.date }} ({{ cal.next_early_close.time_et }} ET)</div>
+      <div class="text-xs text-amber-300/90 mt-0.5">{{ cal.next_early_close.time_uk }} &bull; Flatten 5m prior</div>
+      {% else %}
+      <div class="mt-1 text-sm text-slate-400">None in next 60 days</div>
+      {% endif %}
+    </div>
+
+    <!-- Next High-Impact Macro -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-purple-400 font-bold">Next High-Impact Macro</div>
+      {% if cal.next_macro %}
+      <div class="mt-1 text-sm font-bold text-white font-mono">{{ cal.next_macro.date }} &bull; {{ cal.next_macro.time_et }} ET</div>
+      <div class="text-xs text-slate-300 mt-0.5 truncate" title="{{ cal.next_macro.title }}">{{ cal.next_macro.title }} ({{ cal.next_macro.time_uk }})</div>
+      {% else %}
+      <div class="mt-1 text-sm text-slate-400">None scheduled</div>
+      {% endif %}
+    </div>
+
+    <!-- Active Basket Earnings (14D) -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 shadow">
+      <div class="text-[10px] uppercase tracking-wider text-sky-400 font-bold">Basket Earnings (14D)</div>
+      <div class="mt-1 text-lg font-bold text-white font-mono">{{ cal.earnings_14d_count }} stock(s)</div>
+      <div class="text-xs text-slate-400 mt-0.5">Auto-excluded within 24h by guard</div>
+    </div>
+  </div>
+
+  <!-- Monthly Calendar Grid -->
+  <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
+    <div class="p-3.5 border-b border-slate-700/60 flex flex-wrap items-center justify-between gap-2">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">{{ cal.month_name }}</h2>
+      <div class="flex flex-wrap items-center gap-3 text-[10px] font-semibold">
+        <span class="flex items-center gap-1 text-rose-300"><span class="w-2 h-2 rounded-full bg-rose-500"></span>Holiday</span>
+        <span class="flex items-center gap-1 text-amber-300"><span class="w-2 h-2 rounded-full bg-amber-400"></span>Early Close</span>
+        <span class="flex items-center gap-1 text-purple-300"><span class="w-2 h-2 rounded-full bg-purple-400"></span>Macro</span>
+        <span class="flex items-center gap-1 text-sky-300"><span class="w-2 h-2 rounded-full bg-sky-400"></span>Earnings</span>
+        <span class="flex items-center gap-1 text-emerald-300"><span class="w-2 h-2 rounded-full bg-emerald-400"></span>Session P&amp;L</span>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-7 bg-slate-900/70 border-b border-slate-700/60 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">
+      <div class="py-2">Mon</div>
+      <div class="py-2">Tue</div>
+      <div class="py-2">Wed</div>
+      <div class="py-2">Thu</div>
+      <div class="py-2">Fri</div>
+      <div class="py-2 text-slate-500">Sat</div>
+      <div class="py-2 text-slate-500">Sun</div>
+    </div>
+
+    <div class="divide-y divide-slate-700/40">
+      {% for week in cal.weeks %}
+      <div class="grid grid-cols-7 divide-x divide-slate-700/40">
+        {% for cell in week %}
+        <div class="min-h-[96px] p-2 flex flex-col justify-between
+          {% if not cell.in_month %}bg-slate-900/50 text-slate-600
+          {% elif cell.is_weekend %}bg-slate-900/30 text-slate-500
+          {% else %}bg-slate-800/40 text-slate-200{% endif %}
+          {% if cell.is_today %}ring-1 ring-inset ring-sky-400 bg-sky-950/25{% endif %}">
+
+          <div class="flex items-center justify-between gap-1">
+            <span class="text-xs font-mono font-bold {% if cell.is_today %}text-sky-300{% endif %}">
+              {{ cell.day }}
+            </span>
+            {% if cell.pnl_info %}
+            <a href="/analytics?date={{ cell.date }}" class="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded
+              {% if cell.pnl_info.pnl >= 0 %}bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25{% else %}bg-rose-500/15 text-rose-300 hover:bg-rose-500/25{% endif %}"
+              title="View {{ cell.date }} analytics ({{ cell.pnl_info.trade_count }} trades)">
+              {{ "%+.2f"|format(cell.pnl_info.roi_pct) }}%
+            </a>
+            {% endif %}
+          </div>
+
+          <div class="mt-1 space-y-1">
+            {% for ev in cell.events[:3] %}
+            <div class="text-[10px] leading-tight px-1.5 py-0.5 rounded truncate font-medium border
+              {% if ev.category == 'HOLIDAY' %}bg-rose-500/15 text-rose-300 border-rose-500/30
+              {% elif ev.category == 'EARLY_CLOSE' %}bg-amber-500/15 text-amber-300 border-amber-500/30
+              {% elif ev.category == 'MACRO' %}bg-purple-500/15 text-purple-300 border-purple-500/30
+              {% elif ev.category == 'EARNINGS' %}bg-sky-500/15 text-sky-300 border-sky-500/30
+              {% else %}bg-slate-700/60 text-slate-200 border-slate-600{% endif %}"
+              title="{{ ev.title }} ({{ ev.time_et }} ET / {{ ev.time_uk }}) — {{ ev.notes }}">
+              {{ ev.title }}
+            </div>
+            {% endfor %}
+            {% if cell.events|length > 3 %}
+            <div class="text-[10px] text-slate-400 font-mono pl-1">+{{ cell.events|length - 3 }} more</div>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Upcoming 60-Day Events Feed + Add Custom Event -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Upcoming Feed Table (2 cols) -->
+    <div class="lg:col-span-2 bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden shadow">
+      <div class="p-4 border-b border-slate-700/60 flex items-center justify-between">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">Upcoming Events (Next 60 Days)</h2>
+        <span class="text-[11px] text-slate-400">Dual ET &amp; UK (London) Time</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-900/60 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-700/60">
+            <tr>
+              <th class="py-2.5 px-4">Date</th>
+              <th class="py-2.5 px-4">ET / UK Time</th>
+              <th class="py-2.5 px-4">Type</th>
+              <th class="py-2.5 px-4">Event &amp; Trading Impact</th>
+              <th class="py-2.5 px-4"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-700/40">
+            {% for ev in cal.upcoming_events %}
+            <tr class="hover:bg-slate-700/20 transition">
+              <td class="py-2.5 px-4 font-mono font-bold text-white whitespace-nowrap">{{ ev.date }}</td>
+              <td class="py-2.5 px-4 font-mono text-slate-300 whitespace-nowrap">
+                {% if ev.time_et == 'ALL_DAY' %}All Day{% else %}{{ ev.time_et }} ET <span class="text-slate-500">/</span> {{ ev.time_uk }}{% endif %}
+              </td>
+              <td class="py-2.5 px-4 whitespace-nowrap">
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold border
+                  {% if ev.category == 'HOLIDAY' %}bg-rose-500/15 text-rose-300 border-rose-500/30
+                  {% elif ev.category == 'EARLY_CLOSE' %}bg-amber-500/15 text-amber-300 border-amber-500/30
+                  {% elif ev.category == 'MACRO' %}bg-purple-500/15 text-purple-300 border-purple-500/30
+                  {% elif ev.category == 'EARNINGS' %}bg-sky-500/15 text-sky-300 border-sky-500/30
+                  {% else %}bg-slate-700 text-slate-200 border-slate-600{% endif %}">
+                  {{ ev.category }}
+                </span>
+              </td>
+              <td class="py-2.5 px-4">
+                <div class="font-semibold text-white">
+                  {% if ev.symbol %}
+                  <button type="button" onclick="openSymbolChart('{{ ev.symbol }}')" class="text-sky-400 hover:text-sky-300 underline decoration-sky-500/40 underline-offset-2">{{ ev.symbol }}</button>
+                  &mdash; {{ ev.title }}
+                  {% else %}
+                  {{ ev.title }}
+                  {% endif %}
+                </div>
+                {% if ev.notes %}
+                <div class="text-[11px] text-slate-400 mt-0.5">{{ ev.notes }}</div>
+                {% endif %}
+              </td>
+              <td class="py-2.5 px-4 text-right">
+                {% if ev.is_custom %}
+                <form method="post" action="/api/calendar/events/{{ ev.id }}/delete">
+                  <button type="submit" class="text-[10px] text-rose-400 hover:text-rose-300 font-semibold">Delete</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="5" class="py-6 text-center text-slate-500">No upcoming events in the next 60 days.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Add Custom Event Form (1 col) -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow h-fit space-y-4">
+      <div class="border-b border-slate-700/60 pb-2.5">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-200">Add Custom Event / Reminder</h2>
+        <p class="text-[11px] text-slate-400 mt-0.5">Track custom macro catalysts, earnings, or trading-desk reminders.</p>
+      </div>
+
+      <form method="post" action="/api/calendar/events" class="space-y-3 text-xs">
+        <div>
+          <label class="block text-[10px] uppercase font-semibold text-slate-400 mb-1">Date</label>
+          <input type="date" name="event_date" value="{{ cal.today_str }}" required class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white font-mono focus:outline-none focus:border-sky-500">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase font-semibold text-slate-400 mb-1">Time (ET, e.g. 08:30 or ALL_DAY)</label>
+          <input type="text" name="event_time_et" value="08:30" placeholder="08:30 or ALL_DAY" class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white font-mono focus:outline-none focus:border-sky-500">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase font-semibold text-slate-400 mb-1">Event Title</label>
+          <input type="text" name="title" required placeholder="e.g. PCE Inflation / Fed Chair Speech" class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-sky-500">
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="block text-[10px] uppercase font-semibold text-slate-400 mb-1">Category</label>
+            <select name="category" class="w-full px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white">
+              <option value="CUSTOM">Custom</option>
+              <option value="MACRO">Macro</option>
+              <option value="REMINDER">Reminder</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-[10px] uppercase font-semibold text-slate-400 mb-1">Impact</label>
+            <select name="impact" class="w-full px-2.5 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white">
+              <option value="HIGH">High</option>
+              <option value="MEDIUM" selected>Medium</option>
+              <option value="LOW">Low</option>
+            </select>
+          </div>
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase font-semibold text-slate-400 mb-1">Notes (Optional)</label>
+          <textarea name="notes" rows="2" placeholder="Optional trading impact notes..." class="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-white focus:outline-none focus:border-sky-500"></textarea>
+        </div>
+        <button type="submit" class="w-full py-2 px-4 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold transition shadow">
+          Add to Calendar
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

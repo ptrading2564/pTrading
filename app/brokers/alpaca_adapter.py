@@ -1,7 +1,7 @@
 """Alpaca Broker Adapter implementation using alpaca-py with non-blocking async execution."""
 
 import asyncio
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 import logging
@@ -243,3 +243,33 @@ class AlpacaAdapter(BrokerAdapter):
 
         # Default standard close: 16:00 ET
         return datetime.combine(now_et.date(), time(16, 0), tzinfo=self.tz)
+
+    async def get_market_calendar(self, start_date: date, end_date: date) -> List[Dict[str, str]]:
+        """Queries Alpaca's official NYSE trading calendar for a date range."""
+        try:
+            calendar = await asyncio.to_thread(
+                self.client.get_calendar,
+                filters=GetCalendarRequest(start=start_date, end=end_date),
+            )
+            results: List[Dict[str, str]] = []
+            for day_info in calendar or []:
+                d_str = (
+                    day_info.date.strftime("%Y-%m-%d")
+                    if hasattr(day_info.date, "strftime")
+                    else str(day_info.date)[:10]
+                )
+                o_str = (
+                    day_info.open.strftime("%H:%M")
+                    if hasattr(day_info.open, "strftime")
+                    else str(day_info.open)[:5]
+                )
+                c_str = (
+                    day_info.close.strftime("%H:%M")
+                    if hasattr(day_info.close, "strftime")
+                    else str(day_info.close)[:5]
+                )
+                results.append({"date": d_str, "open": o_str, "close": c_str})
+            return results
+        except Exception as e:
+            logger.warning("Failed to query Alpaca market calendar range: %s", e)
+            return await super().get_market_calendar(start_date, end_date)
