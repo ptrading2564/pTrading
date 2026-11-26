@@ -17,11 +17,14 @@ class TelegramService:
 
     @property
     def token(self) -> str:
-        return settings.TELEGRAM_BOT_TOKEN
+        t = (settings.TELEGRAM_BOT_TOKEN or "").strip().strip('"').strip("'")
+        if t.lower().startswith("bot"):
+            t = t[3:]
+        return t
 
     @property
     def chat_id(self) -> str:
-        return settings.TELEGRAM_CHAT_ID
+        return (settings.TELEGRAM_CHAT_ID or "").strip().strip('"').strip("'")
 
     @property
     def is_configured(self) -> bool:

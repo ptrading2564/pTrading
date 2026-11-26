@@ -1320,8 +1320,10 @@ async def api_export_tax_pnl_csv(username: str = Depends(authenticate_user)):
 @router.post("/api/telegram/test")
 async def test_telegram_connection(username: str = Depends(authenticate_user)):
     """Sends an instant test ping to Telegram to verify credentials and chat connection."""
-    token = settings.TELEGRAM_BOT_TOKEN
-    chat_id = settings.TELEGRAM_CHAT_ID
+    token = (settings.TELEGRAM_BOT_TOKEN or "").strip().strip('"').strip("'")
+    if token.lower().startswith("bot"):
+        token = token[3:]
+    chat_id = (settings.TELEGRAM_CHAT_ID or "").strip().strip('"').strip("'")
 
     if not token or not chat_id:
         return JSONResponse(
@@ -1329,6 +1331,15 @@ async def test_telegram_connection(username: str = Depends(authenticate_user)):
             content={
                 "status": "error",
                 "message": "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env before testing.",
+            },
+        )
+
+    if ":" not in token or len(token) < 20:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "status": "error",
+                "message": "Invalid TELEGRAM_BOT_TOKEN format. The bot token from @BotFather must have numbers, a colon, and letters (e.g. 123456789:ABCdef...).",
             },
         )
 
@@ -1371,8 +1382,7 @@ async def test_telegram_connection(username: str = Depends(authenticate_user)):
 @router.post("/api/telegram/set-webhook")
 async def set_telegram_webhook(username: str = Depends(authenticate_user)):
     """Registers the Telegram webhook so inline Approve/Reject buttons work from your phone."""
-    token = settings.TELEGRAM_BOT_TOKEN
-    if not token:
+    if not telegram.token:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"status": "error", "message": "TELEGRAM_BOT_TOKEN is not set in .env."},
@@ -1388,9 +1398,9 @@ async def set_telegram_webhook(username: str = Depends(authenticate_user)):
 @router.get("/api/telegram/status")
 async def get_telegram_status(username: str = Depends(authenticate_user)):
     """Returns Telegram configuration and connectivity status."""
-    token = settings.TELEGRAM_BOT_TOKEN
-    chat_id = settings.TELEGRAM_CHAT_ID
-    configured = bool(token and chat_id)
+    token = telegram.token
+    chat_id = telegram.chat_id
+    configured = telegram.is_configured
     masked_chat = f"{chat_id[:3]}...{chat_id[-2:]}" if len(chat_id) > 5 else (chat_id if chat_id else "Not set")
     return {
         "enabled": settings.TELEGRAM_ENABLED,
