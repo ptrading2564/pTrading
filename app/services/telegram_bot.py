@@ -1,6 +1,6 @@
 """Telegram Bot Service for push alerts, trade notifications, and Semi-Auto execution approval."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 import httpx
 import logging
 
@@ -13,10 +13,46 @@ class TelegramService:
     """Sends push notifications and interactive inline keyboards to Telegram."""
 
     def __init__(self) -> None:
-        self.token = settings.TELEGRAM_BOT_TOKEN
-        self.chat_id = settings.TELEGRAM_CHAT_ID
-        self.enabled = settings.TELEGRAM_ENABLED and bool(self.token) and bool(self.chat_id)
-        self.base_url = f"https://api.telegram.org/bot{self.token}"
+        pass
+
+    @property
+    def token(self) -> str:
+        return settings.TELEGRAM_BOT_TOKEN
+
+    @property
+    def chat_id(self) -> str:
+        return settings.TELEGRAM_CHAT_ID
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.token and self.chat_id)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(settings.TELEGRAM_ENABLED and self.is_configured)
+
+    @property
+    def base_url(self) -> str:
+        return f"https://api.telegram.org/bot{self.token}"
+
+    async def set_webhook(self, webhook_url: str) -> Tuple[bool, str]:
+        """Registers the Telegram webhook for receiving inline button clicks."""
+        if not self.token:
+            return False, "Telegram Bot Token is not configured."
+        url = f"{self.base_url}/setWebhook"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(url, json={"url": webhook_url})
+                data = res.json()
+                if res.status_code == 200 and data.get("ok"):
+                    logger.info("Successfully registered Telegram webhook: %s", webhook_url)
+                    return True, data.get("description", "Webhook set successfully.")
+                err = data.get("description", f"Status {res.status_code}")
+                logger.error("Failed to set Telegram webhook: %s", err)
+                return False, err
+        except Exception as e:
+            logger.error("Exception setting Telegram webhook: %s", e)
+            return False, str(e)
 
     async def send_message(
         self,

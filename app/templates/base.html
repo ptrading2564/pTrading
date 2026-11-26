@@ -324,9 +324,12 @@
             legendParts.push(`<span class="text-purple-300">Exit: $${Number(tr.exit_price).toFixed(2)}</span>`);
           }
           if (tr.pnl_dollars != null) {
-            const pos = Number(tr.pnl_dollars) >= 0;
-            badgeEl.textContent = `${pos ? "+" : ""}$${Number(tr.pnl_dollars).toFixed(2)} (${tr.pnl_r != null ? (Number(tr.pnl_r) >= 0 ? "+" : "") + Number(tr.pnl_r).toFixed(2) + "R" : tr.exit_reason || "OPEN"})`;
-            badgeEl.className = `text-xs font-mono px-2.5 py-0.5 rounded-full border ${pos ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" : "bg-rose-500/15 text-rose-300 border-rose-500/40"}`;
+            const pVal = Number(tr.pnl_dollars);
+            const pSign = pVal > 0 ? "+" : (pVal < 0 ? "-" : "");
+            const rVal = tr.pnl_r != null ? Number(tr.pnl_r) : null;
+            const rStr = rVal != null ? ((rVal > 0 ? "+" : (rVal < 0 ? "-" : "")) + Math.abs(rVal).toFixed(2) + "R") : (tr.exit_reason || "OPEN");
+            badgeEl.textContent = `${pSign}$${Math.abs(pVal).toFixed(2)} (${rStr})`;
+            badgeEl.className = `text-xs font-mono px-2.5 py-0.5 rounded-full border ${pVal >= 0 ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" : "bg-rose-500/15 text-rose-300 border-rose-500/40"}`;
           } else if (tr.is_open) {
             badgeEl.textContent = `ACTIVE POSITION (${tr.qty} sh)`;
             badgeEl.className = "text-xs font-mono px-2.5 py-0.5 rounded-full border bg-sky-500/15 text-sky-300 border-sky-500/40";

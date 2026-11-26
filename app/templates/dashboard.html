@@ -39,6 +39,19 @@
         <span id="auto-refresh-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
         <span id="auto-refresh-label">Live Auto-Refresh</span>
       </button>
+
+      <!-- Telegram Bot Status & Test Button -->
+      <button id="telegram-test-btn" type="button" onclick="testTelegramAlert()"
+              class="px-3 py-1.5 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition
+              {% if telegram_enabled %}bg-sky-500/15 border-sky-500/40 text-sky-300 hover:bg-sky-500/25
+              {% elif telegram_configured %}bg-amber-500/15 border-amber-500/40 text-amber-300 hover:bg-amber-500/25
+              {% else %}bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700{% endif %}"
+              title="{% if telegram_enabled %}Telegram Bot Active &bull; Click to send test alert{% elif telegram_configured %}Telegram Configured (Disabled in .env) &bull; Click to test connection{% else %}Telegram Not Configured &bull; Click to view setup guide{% endif %}">
+        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+        </svg>
+        <span id="telegram-btn-label">{% if telegram_enabled %}Telegram Active{% elif telegram_configured %}Telegram Ready{% else %}Telegram Off{% endif %}</span>
+      </button>
       {% if kill_switch == 'ON' %}
       <div class="px-3 py-1.5 bg-rose-500/20 border border-rose-500 text-rose-300 rounded-lg text-xs font-bold animate-pulse">
         KILL-SWITCH ACTIVE (TRADING HALTED)
@@ -108,7 +121,7 @@
     <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow">
       <div class="text-xs uppercase tracking-wider text-slate-400 font-medium">Today's P&L</div>
       <div id="live-daily-pnl" class="text-2xl font-bold mt-1 font-mono {% if daily_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-        {% if daily_pnl >= 0 %}+{% endif %}${{ "%.2f"|format(daily_pnl) }} ({{ "%.2f"|format(daily_pnl_pct) }}%)
+        {{ "+" if daily_pnl > 0 else ("-" if daily_pnl < 0 else "") }}${{ "%.2f"|format(daily_pnl|abs) }} ({{ "%+.2f"|format(daily_pnl_pct) if daily_pnl_pct != 0 else "0.00%" }})
       </div>
       <div class="text-xs text-slate-400 mt-1">Daily Limit: -{{ daily_breaker_limit }}% Circuit Breaker</div>
     </div>
@@ -160,7 +173,7 @@
             <td class="py-3 px-4">${{ "%.2f"|format(p.current_price) }}</td>
             <td class="py-3 px-4">${{ "%.2f"|format(p.market_value) }}</td>
             <td class="py-3 px-4 font-semibold {% if p.unrealized_pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-              {% if p.unrealized_pnl >= 0 %}+{% endif %}${{ "%.2f"|format(p.unrealized_pnl) }}
+              {{ "+" if p.unrealized_pnl > 0 else ("-" if p.unrealized_pnl < 0 else "") }}${{ "%.2f"|format(p.unrealized_pnl|abs) }}
             </td>
             <td class="py-3 px-4">
               <span class="px-2 py-0.5 rounded text-[10px] font-sans font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">
@@ -331,9 +344,12 @@
         if (eqEl) eqEl.textContent = `$${Number(d.equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         if (stEl) stEl.textContent = `Starting Today: $${Number(d.starting_equity).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         if (pnlEl) {
-          const sign = d.daily_pnl >= 0 ? "+" : "";
-          pnlEl.textContent = `${sign}$${Number(d.daily_pnl).toFixed(2)} (${Number(d.daily_pnl_pct).toFixed(2)}%)`;
-          pnlEl.className = `text-2xl font-bold mt-1 font-mono ${d.daily_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`;
+          const val = Number(d.daily_pnl);
+          const sign = val > 0 ? "+" : (val < 0 ? "-" : "");
+          const pctVal = Number(d.daily_pnl_pct);
+          const pctSign = pctVal > 0 ? "+" : (pctVal < 0 ? "-" : "");
+          pnlEl.textContent = `${sign}$${Math.abs(val).toFixed(2)} (${pctSign}${Math.abs(pctVal).toFixed(2)}%)`;
+          pnlEl.className = `text-2xl font-bold mt-1 font-mono ${val >= 0 ? "text-emerald-400" : "text-rose-400"}`;
         }
         if (posCntEl) posCntEl.textContent = `${d.positions.length} / ${d.max_positions} Max`;
         if (posHeadEl) posHeadEl.textContent = `Open Positions (${d.positions.length})`;
@@ -363,14 +379,16 @@
             posBody.innerHTML = `<tr><td colspan="7" class="py-6 text-center text-slate-500 font-sans">No open positions. All cash.</td></tr>`;
           } else {
             posBody.innerHTML = d.positions.map(p => {
-              const up = p.unrealized_pnl >= 0;
+              const upVal = Number(p.unrealized_pnl);
+              const upSign = upVal > 0 ? "+" : (upVal < 0 ? "-" : "");
+              const upFormatted = `${upSign}$${Math.abs(upVal).toFixed(2)}`;
               return `<tr class="hover:bg-slate-700/20 transition">
                 <td class="py-3 px-4 font-bold text-white"><button type="button" onclick="openSymbolChart('${p.symbol}')" class="text-sky-400 hover:text-sky-300 underline decoration-sky-500/40 underline-offset-2 transition">${p.symbol}</button></td>
                 <td class="py-3 px-4">${p.qty}</td>
                 <td class="py-3 px-4">$${Number(p.entry_price).toFixed(2)}</td>
                 <td class="py-3 px-4">$${Number(p.current_price).toFixed(2)}</td>
                 <td class="py-3 px-4">$${Number(p.market_value).toFixed(2)}</td>
-                <td class="py-3 px-4 font-semibold ${up ? "text-emerald-400" : "text-rose-400"}">${up ? "+" : ""}$${Number(p.unrealized_pnl).toFixed(2)}</td>
+                <td class="py-3 px-4 font-semibold ${upVal >= 0 ? "text-emerald-400" : "text-rose-400"}">${upFormatted}</td>
                 <td class="py-3 px-4"><span class="px-2 py-0.5 rounded text-[10px] font-sans font-bold bg-sky-500/20 text-sky-400 border border-sky-500/30">ACTIVE</span></td>
               </tr>`;
             }).join("");
@@ -388,5 +406,43 @@
 
   // Start background polling after initial page load
   _ptRefreshTimer = setTimeout(pollDashboardLive, 5000);
+
+  // Telegram test alert & webhook registration
+  async function testTelegramAlert() {
+    const btn = document.getElementById("telegram-test-btn");
+    const label = document.getElementById("telegram-btn-label");
+    if (!btn || !label) return;
+
+    const originalText = label.textContent;
+    label.textContent = "Testing...";
+    btn.disabled = true;
+
+    try {
+      const res = await fetch("/api/telegram/test", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        alert("✅ Telegram Ping Delivered!\n\nCheck your Telegram app for the test notification.\n\nNow registering webhook for mobile 1-tap Semi-Auto order execution buttons...");
+        label.textContent = "Delivered!";
+        try {
+          const whRes = await fetch("/api/telegram/set-webhook", { method: "POST" });
+          const whData = await whRes.json();
+          if (whRes.ok) {
+            console.log("Telegram webhook registered:", whData);
+          }
+        } catch (_) {}
+      } else {
+        alert(`⚠️ Telegram Alert Status:\n${data.message || "Failed to deliver test message."}`);
+        label.textContent = originalText;
+      }
+    } catch (err) {
+      alert(`Network error testing Telegram: ${err.message}`);
+      label.textContent = originalText;
+    } finally {
+      setTimeout(() => {
+        btn.disabled = false;
+        label.textContent = originalText;
+      }, 3000);
+    }
+  }
 </script>
 {% endblock %}

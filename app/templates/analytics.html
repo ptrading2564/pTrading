@@ -405,7 +405,7 @@
               {{ "%+.2f"|format(d_roi) }}%
             </td>
             <td class="py-3 px-4 font-bold {% if (d.realized_pnl or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-              {% if (d.realized_pnl or 0) >= 0 %}+{% endif %}${{ "%.2f"|format(d.realized_pnl or 0.0) }}
+              {{ "+" if (d.realized_pnl or 0) > 0 else ("-" if (d.realized_pnl or 0) < 0 else "") }}${{ "%.2f"|format((d.realized_pnl or 0.0)|abs) }}
             </td>
             <td class="py-3 px-4">{{ d.trade_count }}</td>
             <td class="py-3 px-4 font-sans text-slate-300">{{ d.market_regime or '—' }}</td>
@@ -473,7 +473,7 @@
               {% if t.mae_r is not none %}-{{ "%.1f"|format(t.mae_r|abs) }}R{% else %}—{% endif %}
             </td>
             <td class="py-3 px-4 font-bold {% if (t.pnl_dollars or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-              {% if (t.pnl_dollars or 0) >= 0 %}+{% endif %}${{ "%.2f"|format(t.pnl_dollars or 0.0) }}
+              {{ "+" if (t.pnl_dollars or 0) > 0 else ("-" if (t.pnl_dollars or 0) < 0 else "") }}${{ "%.2f"|format((t.pnl_dollars or 0.0)|abs) }}
             </td>
             <td class="py-3 px-4 font-bold {% if (t.pnl_r or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
               {% if (t.pnl_r or 0) >= 0 %}+{% endif %}{{ "%.2f"|format(t.pnl_r or 0.0) }}R

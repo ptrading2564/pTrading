@@ -596,6 +596,8 @@ async def dashboard_home(
             "basket_string": active_basket_str,
             "basket_count": active_basket_count,
             "scanner_info": scanner_info,
+            "telegram_configured": bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID),
+            "telegram_enabled": bool(settings.TELEGRAM_ENABLED and settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_CHAT_ID),
         },
     )
 
@@ -1313,5 +1315,88 @@ async def api_export_tax_pnl_csv(username: str = Depends(authenticate_user)):
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="ptrading_realised_pnl_{today_str}.csv"'},
     )
+
+
+@router.post("/api/telegram/test")
+async def test_telegram_connection(username: str = Depends(authenticate_user)):
+    """Sends an instant test ping to Telegram to verify credentials and chat connection."""
+    token = settings.TELEGRAM_BOT_TOKEN
+    chat_id = settings.TELEGRAM_CHAT_ID
+
+    if not token or not chat_id:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={
+                "status": "error",
+                "message": "TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env before testing.",
+            },
+        )
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    text = (
+        f"🔔 <b>pTrading Alert Test</b>\n"
+        f"<b>Status:</b> ✅ Connected Successfully\n"
+        f"<b>Environment:</b> <code>{settings.ENVIRONMENT}</code>\n"
+        f"<b>Initiated by:</b> <code>{username}</code>\n"
+        f"<b>Time:</b> {now_str}\n\n"
+        f"<i>Your pTrading bot is online and will deliver live signals and reports to this chat!</i>"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            )
+            data = res.json()
+            if res.status_code == 200 and data.get("ok"):
+                return JSONResponse(
+                    content={
+                        "status": "success",
+                        "message": "Test alert delivered to your Telegram app!",
+                    }
+                )
+            err_desc = data.get("description", f"HTTP {res.status_code}")
+            return JSONResponse(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                content={"status": "error", "message": f"Telegram API error: {err_desc}"},
+            )
+    except Exception as e:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"status": "error", "message": f"Network error connecting to Telegram: {str(e)}"},
+        )
+
+
+@router.post("/api/telegram/set-webhook")
+async def set_telegram_webhook(username: str = Depends(authenticate_user)):
+    """Registers the Telegram webhook so inline Approve/Reject buttons work from your phone."""
+    token = settings.TELEGRAM_BOT_TOKEN
+    if not token:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"status": "error", "message": "TELEGRAM_BOT_TOKEN is not set in .env."},
+        )
+    domain = settings.DOMAIN_NAME or "trading2564.com"
+    webhook_url = f"https://{domain}/webhook/telegram"
+    ok, msg = await telegram.set_webhook(webhook_url)
+    if ok:
+        return JSONResponse(content={"status": "success", "message": f"Telegram webhook registered: {msg}"})
+    return JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content={"status": "error", "message": msg})
+
+
+@router.get("/api/telegram/status")
+async def get_telegram_status(username: str = Depends(authenticate_user)):
+    """Returns Telegram configuration and connectivity status."""
+    token = settings.TELEGRAM_BOT_TOKEN
+    chat_id = settings.TELEGRAM_CHAT_ID
+    configured = bool(token and chat_id)
+    masked_chat = f"{chat_id[:3]}...{chat_id[-2:]}" if len(chat_id) > 5 else (chat_id if chat_id else "Not set")
+    return {
+        "enabled": settings.TELEGRAM_ENABLED,
+        "configured": configured,
+        "chat_id": masked_chat,
+    }
+
 
 
