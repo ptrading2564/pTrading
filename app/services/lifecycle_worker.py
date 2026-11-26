@@ -10,7 +10,7 @@ from app.brokers.base import BrokerAdapter
 from app.config import settings
 from app.db import get_connection, get_system_state, save_daily_report, set_system_state
 from app.services.analytics_service import analytics_service
-from app.services.calendar_service import CalendarService
+from app.services.calendar_service import CalendarService, is_fomc_day
 from app.services.financing_service import financing_service
 from app.services.strategy_reviewer import strategy_reviewer
 from app.services.telegram_bot import telegram
@@ -575,10 +575,94 @@ class LifecycleWorker:
             except Exception as e:
                 logger.error("Failed to generate/send EOD daily report for %s: %s", today_str, e)
 
+    async def check_fomc_pre_event_flatten(self) -> None:
+        """Flattens all open positions ahead of the 14:00 ET FOMC rate decision to avoid whipsaw slippage."""
+        if not settings.FOMC_GUARD_ENABLED:
+            return
+
+        now_et = datetime.now(self.tz)
+        if not is_fomc_day(now_et.date()):
+            return
+
+        today_str = now_et.strftime("%Y-%m-%d")
+        if await get_system_state("fomc_flatten_done") == today_str:
+            return
+
+        try:
+            fh, fm = map(int, settings.FOMC_PRE_EVENT_FLATTEN_TIME.split(":"))
+            flatten_cutoff = now_et.replace(hour=fh, minute=fm, second=0, microsecond=0)
+        except Exception:
+            flatten_cutoff = now_et.replace(hour=13, minute=55, second=0, microsecond=0)
+
+        if now_et < flatten_cutoff:
+            return
+
+        try:
+            if not await self.broker.is_market_open():
+                return
+        except Exception:
+            return
+
+        logger.warning(
+            "FOMC Guard Pre-Event Flatten triggered at %s ET (>= %s ET).",
+            now_et.strftime("%H:%M:%S"),
+            settings.FOMC_PRE_EVENT_FLATTEN_TIME,
+        )
+
+        positions = await self.broker.get_positions()
+        pos_count = len(positions)
+        pos_prices = {p.symbol: float(p.current_price) for p in positions}
+
+        if pos_count > 0:
+            await self.broker.close_all_positions()
+            await asyncio.sleep(2.0)
+            remaining = await self.broker.get_positions()
+            if remaining:
+                await self.broker.close_all_positions()
+                await asyncio.sleep(2.0)
+                remaining = await self.broker.get_positions()
+        else:
+            remaining = []
+
+        remaining_symbols = {p.symbol for p in remaining}
+        closed_orders = await self.broker.get_closed_orders(
+            after=datetime.now(timezone.utc) - timedelta(hours=8)
+        )
+        async with get_connection() as conn:
+            cursor = await conn.execute("SELECT * FROM trades WHERE is_open = 1;")
+            open_trades = [dict(r) for r in await cursor.fetchall()]
+            for trade in open_trades:
+                if trade["symbol"] in remaining_symbols:
+                    continue
+                await self._finalize_closed_trade(
+                    conn=conn,
+                    trade=trade,
+                    closed_orders=closed_orders,
+                    default_reason="FOMC_FLATTEN",
+                    fallback_exit_price=pos_prices.get(trade["symbol"]),
+                )
+            await conn.commit()
+
+        await self.update_daily_stats_snapshot()
+        if not remaining:
+            await set_system_state("fomc_flatten_done", today_str)
+            await telegram.send_message(
+                f"🛡️ <b>FOMC Guard Pre-Event Flatten ({settings.FOMC_PRE_EVENT_FLATTEN_TIME} ET)</b>\n"
+                f"Closed {pos_count} open position(s) ahead of the 14:00 ET FOMC rate decision. "
+                f"Entries remain halted for the rest of today's session."
+            )
+        else:
+            rem_list = ", ".join(sorted(remaining_symbols))
+            logger.error("FOMC Flatten incomplete! Still open at broker: %s", rem_list)
+            await telegram.send_message(
+                f"⚠️ <b>FOMC Flatten Warning:</b> {len(remaining)} position(s) still open: <code>{rem_list}</code>. Will retry."
+            )
+
     async def run_iteration(self) -> None:
         """Single tick of the lifecycle worker."""
         await self.step_breakeven_if_earned()
         await self.cancel_stale_orders()
+        await self.check_fomc_pre_event_flatten()
         await self.check_eod_flatten()
         await self.sync_closed_trades()
         await self.check_eod_daily_report()

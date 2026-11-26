@@ -14,6 +14,7 @@ from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from app.brokers.alpaca_adapter import AlpacaAdapter
 from app.config import settings
 from app.db import get_connection, get_system_state, record_signal, set_system_state
+from app.services.calendar_service import is_fomc_day
 from app.services.risk_manager import RiskManager
 from app.services.telegram_bot import telegram
 
@@ -258,6 +259,19 @@ class MarketScanner:
         if cur_t >= entry_cutoff_et:
             self.status_message = "AFTER_ENTRY_CUTOFF (No new entries after 15:00 ET)"
             return []
+
+        # FOMC Guard: halt new entries ahead of 14:00 ET rate decision
+        if settings.FOMC_GUARD_ENABLED and is_fomc_day(now_et.date()):
+            try:
+                fh, fm = map(int, settings.FOMC_ENTRY_CUTOFF_TIME.split(":"))
+                fomc_cutoff = time(fh, fm)
+            except Exception:
+                fomc_cutoff = time(13, 30)
+            if cur_t >= fomc_cutoff:
+                self.status_message = (
+                    f"FOMC_GUARD_ACTIVE (Entries halted after {settings.FOMC_ENTRY_CUTOFF_TIME} ET for 14:00 ET FOMC)"
+                )
+                return []
 
         # 09:45 - 15:00 ET: Active Breakout Scanning Window
         # Step 1: Ensure Opening Ranges are established

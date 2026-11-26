@@ -31,6 +31,12 @@ CPI_DATES_2026_2027 = {
 }
 
 
+def is_fomc_day(target_date: Optional[date] = None) -> bool:
+    """Returns True if target_date is a scheduled FOMC Rate Decision day (14:00 ET announcement)."""
+    d = target_date or datetime.now(ZoneInfo(settings.MARKET_TIMEZONE)).date()
+    return d.strftime("%Y-%m-%d") in FOMC_DATES_2026_2027
+
+
 def identify_us_holiday_name(d: date) -> str:
     """Maps a closed NYSE weekday date to its standard US market holiday name."""
     m, day, wd = d.month, d.day, d.weekday()

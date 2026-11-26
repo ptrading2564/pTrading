@@ -78,3 +78,9 @@ async def test_calendar_routes_and_custom_events():
         res_api = await client.get("/api/calendar/events?days=30", auth=auth)
         assert res_api.status_code == 200
         assert "events" in res_api.json()
+
+
+def test_is_fomc_day_helper():
+    from app.services.calendar_service import is_fomc_day
+    assert is_fomc_day(date(2026, 12, 9)) is True
+    assert is_fomc_day(date(2026, 12, 10)) is False

@@ -83,6 +83,11 @@ class Settings(BaseSettings):
     EOD_FLATTEN_TIME: str = "15:55"
     EARLY_CLOSE_FLATTEN_TIME: str = "12:55"
 
+    # FOMC Rate Decision Guard (14:00 ET announcements)
+    FOMC_GUARD_ENABLED: bool = True
+    FOMC_ENTRY_CUTOFF_TIME: str = "13:30"
+    FOMC_PRE_EVENT_FLATTEN_TIME: str = "13:55"
+
     # Server-Side Market Scanner (Option 3)
     SCANNER_ENABLED: bool = True
     SCANNER_POLL_INTERVAL_SECONDS: int = 30
