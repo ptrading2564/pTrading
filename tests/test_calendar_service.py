@@ -84,3 +84,23 @@ def test_is_fomc_day_helper():
     from app.services.calendar_service import is_fomc_day
     assert is_fomc_day(date(2026, 12, 9)) is True
     assert is_fomc_day(date(2026, 12, 10)) is False
+
+
+@pytest.mark.asyncio
+async def test_alpaca_get_market_close_time_handles_datetime():
+    from datetime import datetime
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from app.brokers.alpaca_adapter import AlpacaAdapter
+
+    adapter = AlpacaAdapter.__new__(AlpacaAdapter)
+    from zoneinfo import ZoneInfo
+    adapter.tz = ZoneInfo(settings.MARKET_TIMEZONE)
+    adapter._close_time_cache = {}
+    adapter.client = MagicMock()
+    # alpaca-py returns datetime objects for day_info.close
+    adapter.client.get_calendar.return_value = [SimpleNamespace(close=datetime(2026, 11, 27, 13, 0))]
+
+    close_dt = await adapter.get_market_close_time()
+    assert close_dt.hour == 13
+    assert close_dt.minute == 0

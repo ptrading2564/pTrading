@@ -43,6 +43,7 @@ class AlpacaAdapter(BrokerAdapter):
             secret_key=self.secret_key,
             paper=self.paper,
         )
+        self._close_time_cache: Dict[str, datetime] = {}
 
     async def get_account_equity(self) -> float:
         """Fetch live account equity."""
@@ -220,9 +221,12 @@ class AlpacaAdapter(BrokerAdapter):
         return bool(clock.is_open)
 
     async def get_market_close_time(self) -> datetime:
-        """Returns the market close time for today in Eastern Time (handles early closes)."""
+        """Returns the market close time for today in Eastern Time (handles early closes & datetime objects)."""
         now_et = datetime.now(self.tz)
         today_str = now_et.strftime("%Y-%m-%d")
+
+        if today_str in self._close_time_cache:
+            return self._close_time_cache[today_str]
 
         try:
             calendar = await asyncio.to_thread(
@@ -232,12 +236,17 @@ class AlpacaAdapter(BrokerAdapter):
             if calendar and len(calendar) > 0:
                 day_info = calendar[0]
                 close_time_obj = day_info.close
-                # If close_time_obj is time or string
-                if isinstance(close_time_obj, time):
-                    return datetime.combine(now_et.date(), close_time_obj, tzinfo=self.tz)
+                resolved: Optional[datetime] = None
+                if isinstance(close_time_obj, datetime):
+                    resolved = datetime.combine(now_et.date(), close_time_obj.time(), tzinfo=self.tz)
+                elif isinstance(close_time_obj, time):
+                    resolved = datetime.combine(now_et.date(), close_time_obj, tzinfo=self.tz)
                 elif isinstance(close_time_obj, str):
-                    t = datetime.strptime(close_time_obj, "%H:%M").time()
-                    return datetime.combine(now_et.date(), t, tzinfo=self.tz)
+                    t = datetime.strptime(close_time_obj.strip()[:5], "%H:%M").time()
+                    resolved = datetime.combine(now_et.date(), t, tzinfo=self.tz)
+                if resolved is not None:
+                    self._close_time_cache[today_str] = resolved
+                    return resolved
         except Exception as e:
             logger.error("Error querying Alpaca calendar: %s. Defaulting to 16:00 ET", e)
 

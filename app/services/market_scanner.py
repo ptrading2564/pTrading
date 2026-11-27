@@ -235,8 +235,14 @@ class MarketScanner:
 
         market_open_et = time(9, 30)
         or_cutoff_et = time(9, 45)
-        entry_cutoff_et = time(15, 0)
-        market_close_et = time(16, 0)
+        try:
+            market_close_dt = await self.broker.get_market_close_time()
+            market_close_et = market_close_dt.time()
+            # Stop new entries 1 hour before official market close (15:00 ET regular, 12:00 ET on 13:00 early closes)
+            entry_cutoff_et = (market_close_dt - timedelta(hours=1)).time()
+        except Exception:
+            market_close_et = time(16, 0)
+            entry_cutoff_et = time(15, 0)
         cur_t = now_et.time()
 
         # Check market hours
@@ -255,9 +261,9 @@ class MarketScanner:
             await self.update_opening_ranges(basket, today_date)
             return []
 
-        # 15:00 - 16:00 ET: After entry window cutoff
+        # After dynamic entry window cutoff (15:00 ET regular / 12:00 ET early close)
         if cur_t >= entry_cutoff_et:
-            self.status_message = "AFTER_ENTRY_CUTOFF (No new entries after 15:00 ET)"
+            self.status_message = f"AFTER_ENTRY_CUTOFF (No new entries after {entry_cutoff_et.strftime('%H:%M')} ET)"
             return []
 
         # FOMC Guard: halt new entries ahead of 14:00 ET rate decision
