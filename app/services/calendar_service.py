@@ -291,6 +291,80 @@ class CalendarService:
                 alerts.append(e_copy)
         return alerts
 
+    async def get_next_screen_schedule(self) -> Dict[str, Any]:
+        """Computes the best ChartMill screening window for the next trading session (holiday & weekend aware)."""
+        now_et = datetime.now(self.tz)
+        today = now_et.date()
+        s_map = await self.get_trading_sessions_map(today, today + timedelta(days=10))
+
+        # Target today if today is a trading day and we haven't passed the 09:30 ET open yet;
+        # otherwise target the next upcoming trading day.
+        target_date: Optional[date] = None
+        target_sess: Optional[Dict[str, str]] = None
+        today_str = today.strftime("%Y-%m-%d")
+
+        if today_str in s_map and now_et.time() < time(9, 30):
+            target_date = today
+            target_sess = s_map[today_str]
+        else:
+            cur = today + timedelta(days=1)
+            for _ in range(10):
+                d_str = cur.strftime("%Y-%m-%d")
+                if d_str in s_map:
+                    target_date = cur
+                    target_sess = s_map[d_str]
+                    break
+                cur += timedelta(days=1)
+
+        if target_date is None:
+            target_date = today + timedelta(days=1)
+            target_sess = {"date": target_date.strftime("%Y-%m-%d"), "open": "09:30", "close": "16:00"}
+
+        is_today = target_date == today
+        is_tomorrow = target_date == (today + timedelta(days=1))
+        day_short = target_date.strftime("%a %d %b")
+        session_label = f"Today ({day_short})" if is_today else (f"Tomorrow ({day_short})" if is_tomorrow else day_short)
+
+        close_et = (target_sess or {}).get("close", "16:00")
+        is_early_close = close_et < "16:00"
+
+        uk_start = convert_et_to_uk_time(target_date, "08:30")
+        uk_end = convert_et_to_uk_time(target_date, "09:15")
+        uk_cutoff = convert_et_to_uk_time(target_date, "09:25")
+        uk_open = convert_et_to_uk_time(target_date, "09:30")
+        uk_close = convert_et_to_uk_time(target_date, close_et)
+
+        # Strip duplicate TZ suffix on start time for compact range display (e.g. "13:30-14:15 GMT")
+        uk_start_hhmm = uk_start.split(" ")[0]
+        ideal_uk_range = f"{uk_start_hhmm}-{uk_end}"
+
+        # Check if yesterday/prior day was a holiday or weekend
+        skipped_days = (target_date - today).days
+        if is_today:
+            freshness_note = "EOD ratings are already updated from the last US close. Upload before 09:25 ET."
+        elif skipped_days > 1:
+            freshness_note = (
+                f"Skips weekend/NYSE holiday ({skipped_days} days away). "
+                "ChartMill ratings won't change until after the next US market close."
+            )
+        else:
+            freshness_note = "Fresh EOD ratings are ready after ~20:00 ET (01:00 UK) tonight; re-check pre-market for earnings."
+
+        pill_prefix = "Today" if is_today else target_date.strftime("%a %d %b")
+        return {
+            "target_date": target_date.strftime("%Y-%m-%d"),
+            "session_label": session_label,
+            "pill_text": f"Next Screen: {pill_prefix} · {uk_start}",
+            "ideal_window_et": "08:30–09:15 ET",
+            "ideal_window_uk": ideal_uk_range,
+            "cutoff_et": "09:25 ET",
+            "cutoff_uk": uk_cutoff,
+            "market_hours_et": f"09:30–{close_et} ET",
+            "market_hours_uk": f"{uk_open.split(' ')[0]}–{uk_close}",
+            "is_early_close": is_early_close,
+            "freshness_note": freshness_note,
+        }
+
     async def get_month_view(self, year: Optional[int] = None, month: Optional[int] = None) -> Dict[str, Any]:
         """Builds the monthly calendar grid, past daily P&L overlay, summary cards, and 60-day upcoming feed."""
         now_et = datetime.now(self.tz)

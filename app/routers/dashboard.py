@@ -573,9 +573,11 @@ async def dashboard_home(
 
     try:
         upcoming_alerts = await calendar_service.get_upcoming_alerts()
+        next_screen = await calendar_service.get_next_screen_schedule()
     except Exception as e:
         logger.debug("Calendar alerts lookup skipped: %s", e)
         upcoming_alerts = []
+        next_screen = None
 
     user_info = getattr(request.state, "user", None) or {
         "user": username,
@@ -590,6 +592,7 @@ async def dashboard_home(
             "user": user_info,
             "username": username,
             "upcoming_alerts": upcoming_alerts,
+            "next_screen": next_screen,
             "equity": equity,
             "starting_equity": starting_equity,
             "daily_pnl": daily_pnl,

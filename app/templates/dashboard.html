@@ -3,25 +3,64 @@
 {% block content %}
 <div class="space-y-6">
 
-  {% if upcoming_alerts %}
-  <!-- Upcoming Market Calendar Alert Banner (Today / Tomorrow) -->
-  <div class="bg-amber-500/10 border border-amber-500/40 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 shadow">
+  {% if upcoming_alerts or next_screen %}
+  <!-- Market Calendar Alert & Next ChartMill Screen Bar -->
+  <div class="{% if upcoming_alerts %}bg-amber-500/10 border-amber-500/40{% else %}bg-slate-800/70 border-slate-700/70{% endif %} border rounded-xl px-4 py-2.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2.5 shadow">
     <div class="flex flex-wrap items-center gap-2 text-xs">
-      {% for al in upcoming_alerts %}
-      <span class="px-2 py-0.5 rounded font-bold uppercase text-[10px]
-        {% if al.category == 'HOLIDAY' %}bg-rose-500/20 text-rose-300 border border-rose-500/40
-        {% elif al.category == 'EARLY_CLOSE' %}bg-amber-500/20 text-amber-300 border border-amber-500/40
-        {% else %}bg-purple-500/20 text-purple-300 border border-purple-500/40{% endif %}">
-        {{ al.when_label }}
-      </span>
-      <span class="font-semibold text-white">{{ al.title }}</span>
-      <span class="text-slate-300">&mdash; {{ al.notes }}</span>
-      {% if not loop.last %}<span class="text-slate-600 mx-1">|</span>{% endif %}
-      {% endfor %}
+      {% if upcoming_alerts %}
+        {% for al in upcoming_alerts %}
+        <span class="px-2 py-0.5 rounded font-bold uppercase text-[10px]
+          {% if al.category == 'HOLIDAY' %}bg-rose-500/20 text-rose-300 border border-rose-500/40
+          {% elif al.category == 'EARLY_CLOSE' %}bg-amber-500/20 text-amber-300 border border-amber-500/40
+          {% else %}bg-purple-500/20 text-purple-300 border border-purple-500/40{% endif %}">
+          {{ al.when_label }}
+        </span>
+        <span class="font-semibold text-white">{{ al.title }}</span>
+        <span class="text-slate-300">&mdash; {{ al.notes }}</span>
+        {% if not loop.last %}<span class="text-slate-600 mx-1">|</span>{% endif %}
+        {% endfor %}
+      {% elif next_screen %}
+        <span class="px-2 py-0.5 rounded font-bold uppercase text-[10px] bg-sky-500/15 text-sky-300 border border-sky-500/30">
+          NEXT SESSION
+        </span>
+        <span class="font-semibold text-white">{{ next_screen.session_label }}</span>
+        <span class="text-slate-400 font-mono">{{ next_screen.market_hours_et }} ({{ next_screen.market_hours_uk }})</span>
+      {% endif %}
     </div>
-    <a href="/calendar" class="text-xs font-semibold text-amber-300 hover:text-amber-200 whitespace-nowrap transition">
-      View Calendar &rarr;
-    </a>
+
+    <div class="flex items-center gap-3 shrink-0">
+      {% if next_screen %}
+      <!-- Compact Clickable Hover-Over Pill for Best ChartMill Screening Window -->
+      <div class="relative group">
+        <a href="https://www.chartmill.com/stock/stock-screener" target="_blank" rel="noopener noreferrer"
+           class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-900/80 border border-sky-500/40 text-sky-300 text-[11px] font-mono font-semibold hover:bg-sky-500/20 hover:text-sky-200 transition whitespace-nowrap">
+          <svg class="w-3.5 h-3.5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          {{ next_screen.pill_text }}
+          <span class="text-sky-400/80 text-[10px]">&nearr;</span>
+        </a>
+        <!-- Hover Popover -->
+        <div class="hidden group-hover:block absolute right-0 top-full mt-2 w-80 z-40 rounded-xl bg-slate-900 border border-slate-700 p-3.5 shadow-2xl text-xs space-y-2 pointer-events-none">
+          <div class="flex items-center justify-between border-b border-slate-700/70 pb-1.5">
+            <span class="font-bold text-white uppercase tracking-wider text-[10px]">ChartMill Screening Reminder</span>
+            <span class="text-[10px] font-mono text-sky-400">{{ next_screen.session_label }}</span>
+          </div>
+          <div class="space-y-1 font-mono text-[11px]">
+            <div class="flex justify-between"><span class="text-slate-400 font-sans">Ideal Window (UK):</span><span class="text-emerald-400 font-bold">{{ next_screen.ideal_window_uk }}</span></div>
+            <div class="flex justify-between"><span class="text-slate-400 font-sans">Ideal Window (ET):</span><span class="text-slate-200">{{ next_screen.ideal_window_et }}</span></div>
+            <div class="flex justify-between"><span class="text-slate-400 font-sans">Upload Cutoff:</span><span class="text-amber-300">{{ next_screen.cutoff_uk }} ({{ next_screen.cutoff_et }})</span></div>
+            <div class="flex justify-between"><span class="text-slate-400 font-sans">Session Hours:</span><span class="text-slate-300">{{ next_screen.market_hours_et }}</span></div>
+          </div>
+          <p class="text-[11px] text-slate-400 leading-snug pt-1 border-t border-slate-800">
+            {{ next_screen.freshness_note }} <span class="text-sky-400">Click pill to open ChartMill Screener.</span>
+          </p>
+        </div>
+      </div>
+      {% endif %}
+
+      <a href="/calendar" class="text-xs font-semibold {% if upcoming_alerts %}text-amber-300 hover:text-amber-200{% else %}text-sky-400 hover:text-sky-300{% endif %} whitespace-nowrap transition">
+        View Calendar &rarr;
+      </a>
+    </div>
   </div>
   {% endif %}
 
@@ -215,12 +254,9 @@
 
   <!-- ChartMill Active Universe Section -->
   <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-5 shadow space-y-4">
-    <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-slate-700/60 pb-3">
-      <div>
-        <h2 class="text-sm font-bold uppercase tracking-wider text-slate-200">Daily Momentum Universe Manager (ChartMill)</h2>
-        <p class="text-xs text-slate-400 mt-0.5">Upload morning ChartMill CSV export to filter earnings and auto-sync today's top momentum stocks directly into the server scanner.</p>
-      </div>
-      <a href="https://www.chartmill.com" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 transition">Open ChartMill &rarr;</a>
+    <div class="border-b border-slate-700/60 pb-3">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-slate-200">Daily Momentum Universe Manager (ChartMill)</h2>
+      <p class="text-xs text-slate-400 mt-0.5">Upload morning ChartMill CSV export to filter earnings and auto-sync today's top momentum stocks directly into the server scanner.</p>
     </div>
 
     <!-- Upload Form -->
