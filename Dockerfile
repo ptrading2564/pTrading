@@ -39,6 +39,7 @@ RUN groupadd -g 1001 ptrading && \
 
 # Copy application source code
 COPY --chown=ptrading:ptrading app /app/app
+COPY --chown=ptrading:ptrading backtest /app/backtest
 COPY --chown=ptrading:ptrading pyproject.toml /app/
 
 USER ptrading

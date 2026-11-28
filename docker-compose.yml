@@ -10,6 +10,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./app:/app/app:ro
+      - ./backtest:/app/backtest:ro
     env_file:
       - .env
     environment:

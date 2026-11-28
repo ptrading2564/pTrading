@@ -1,0 +1,792 @@
+{% extends "base.html" %}
+
+{% block title %}Backtest Lab — pTrading{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+  <!-- Header & System Readiness Strip -->
+  <div class="border-b border-slate-700/60 pb-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+    <div>
+      <div class="flex items-center gap-2.5">
+        <h1 class="text-xl font-bold text-white">Automated Portfolio Backtest Lab</h1>
+        <span class="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-semibold">
+          Isolated DB &bull; Zero Live Impact
+        </span>
+      </div>
+      <p class="text-xs text-slate-400 mt-1">
+        Replays live <span class="font-mono text-slate-300">MarketScanner</span>, <span class="font-mono text-slate-300">RiskManager</span> (4/6 breakeven slot recycling),
+        <span class="font-mono text-slate-300">FinancingService</span> drawdown ladder, and FOMC/early-close guards on cached historical Alpaca bars.
+      </p>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2 text-xs">
+      {% if cred_source == 'BACKTEST_ALPACA_KEY' %}
+      <span class="px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-medium">
+        Dedicated Backtest Keys Ready
+      </span>
+      {% elif cred_source == 'LIVE_ALPACA_KEY_FALLBACK' %}
+      <span class="px-2.5 py-1 rounded-lg bg-sky-500/15 text-sky-300 border border-sky-500/30 font-medium" title="Using read-only live Alpaca data keys; add BACKTEST_ALPACA_API_KEY to .env for an independent 200 req/min quota.">
+        Alpaca Data Ready (Read-Only Fallback)
+      </span>
+      {% else %}
+      <span class="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/40 font-medium">
+        Add BACKTEST_ALPACA_API_KEY in .env to Fetch Data
+      </span>
+      {% endif %}
+
+      <span class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-300 border border-slate-700 font-mono">
+        Cache: {{ cache_stats.distinct_symbols or 0 }} syms
+        ({{ cache_stats.get('1Day', 0) }} 1D &bull; {{ cache_stats.get('5Min', 0) }} 5m &bull; {{ cache_stats.get('1Min', 0) }} 1m)
+      </span>
+    </div>
+  </div>
+
+  <!-- Run Builder Card -->
+  <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl shadow overflow-hidden">
+    <div class="px-5 py-3.5 border-b border-slate-700/60 flex items-center justify-between bg-slate-800/60">
+      <h2 class="text-sm font-bold uppercase tracking-wider text-white">Launch New Backtest Run</h2>
+      <span class="text-[11px] text-slate-400">SIP historical data is free on Alpaca Basic (&gt;15m delayed) and cached locally after first run</span>
+    </div>
+
+    <form id="backtest-form" onsubmit="launchBacktest(event)" class="p-5 space-y-4">
+      <!-- Primary Row -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+        <div class="lg:col-span-2">
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Universe Mode</label>
+          <select id="bt_mode" name="mode" onchange="toggleModeFields()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500">
+            <option value="screener" selected>Mode A: Point-in-Time Dynamic Screener (Unbiased)</option>
+            <option value="fixed">Mode B: Fixed DEFAULT_BASKET / Custom Tickers</option>
+            <option value="chartmill_history">Mode C: Saved ChartMill CSV History (SQLite)</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Start Date</label>
+          <input type="date" id="bt_start" name="start_date" value="{{ default_start }}" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-sky-500">
+        </div>
+
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">End Date</label>
+          <input type="date" id="bt_end" name="end_date" value="{{ default_end }}" required class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-sky-500">
+        </div>
+
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Alpaca Feed</label>
+          <select id="bt_feed" name="feed" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500">
+            <option value="sip" selected>SIP Historical (Full US Tape)</option>
+            <option value="iex">IEX (Matches Live Free Feed)</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Run Label (Optional)</label>
+          <input type="text" id="bt_name" name="name" placeholder="e.g. Mode A SIP Baseline" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500">
+        </div>
+      </div>
+
+      <!-- Mode B Custom Symbols (Hidden unless Mode B selected) -->
+      <div id="custom-symbols-row" class="hidden">
+        <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">
+          Custom Symbols (Comma-separated; leave blank to use live DEFAULT_BASKET 38 tickers)
+        </label>
+        <input type="text" id="bt_custom_symbols" name="custom_symbols" placeholder="Leave blank for DEFAULT_BASKET, or enter e.g. NVDA,AMD,PLTR,META,AVGO" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white font-mono placeholder-slate-500 focus:outline-none focus:border-sky-500">
+        <p class="text-[11px] text-amber-300/90 mt-1">Note: Backtesting a fixed list of today's leaders introduces survivorship/selection bias — compare against Mode A to validate true out-of-sample edge.</p>
+      </div>
+
+      <!-- Strategy Parameters Row -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Start Capital ($)</label>
+          <input type="number" id="bt_capital" name="initial_capital" value="50000" step="1000" min="1000" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Risk Profile</label>
+          <select id="bt_risk_profile" name="risk_profile" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+            <option value="P1_DEFENSIVE">P1 (0.25%)</option>
+            <option value="P2_BALANCED" selected>P2 (0.50%)</option>
+            <option value="P3_GROWTH">P3 (1.00%)</option>
+            <option value="CUSTOM">Custom %</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Custom Risk %</label>
+          <input type="number" id="bt_risk_pct" name="risk_percent_per_trade" value="{{ defaults.risk_pct }}" step="0.05" min="0.1" max="3.0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Max Basket (0=All)</label>
+          <input type="number" id="bt_basket_size" name="max_basket_size" value="38" min="0" max="300" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Min RVOL</label>
+          <input type="number" id="bt_rvol" name="scanner_min_rvol" value="{{ defaults.min_rvol }}" step="0.1" min="0.5" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Max ATR Ext</label>
+          <input type="number" id="bt_atr_ext" name="scanner_max_atr_extension" value="{{ defaults.max_atr_ext }}" step="0.05" min="0.1" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">BE Trigger (R)</label>
+          <input type="number" id="bt_be_r" name="breakeven_trigger_r" value="{{ defaults.be_trigger_r }}" step="0.25" min="0.25" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Exit Slip (bps)</label>
+          <input type="number" id="bt_slip" name="exit_slippage_bps" value="3.0" step="0.5" min="0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+        </div>
+      </div>
+
+      <!-- Live Guard Toggles -->
+      <div class="flex flex-wrap items-center gap-x-5 gap-y-2 pt-1 text-xs text-slate-300">
+        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" id="bt_slot_recycle" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
+          <span>Breakeven Slot Recycling ({{ defaults.max_positions }}&rarr;{{ defaults.max_total_be }})</span>
+        </label>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" id="bt_health_ladder" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
+          <span>Drawdown Health Ladder</span>
+        </label>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" id="bt_fomc" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
+          <span>FOMC Guard (13:30/13:55)</span>
+        </label>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" id="bt_early_close" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
+          <span>Early-Close Cutoff</span>
+        </label>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" id="bt_spy_gate" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
+          <span>SPY &amp; QQQ &gt; VWAP Gate</span>
+        </label>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" id="bt_lock_reject" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
+          <span>Lock Symbol on Reject (Live Parity)</span>
+        </label>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" id="bt_1m" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
+          <span>1m Intrabar Execution</span>
+        </label>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Optional: Query free SEC EDGAR XBRL filings (point-in-time) to enforce Fundamental Rating >= 5 in Mode A.">
+          <input type="checkbox" id="bt_edgar" class="rounded bg-slate-900 border-slate-600 text-indigo-500">
+          <span class="text-indigo-300">SEC EDGAR Fundamental Gate (&ge;5)</span>
+        </label>
+        {% if defaults.gemini_configured %}
+        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+          <input type="checkbox" id="bt_gemini" class="rounded bg-slate-900 border-slate-600 text-emerald-500">
+          <span class="text-emerald-300">Gemini Quant Review</span>
+        </label>
+        {% endif %}
+      </div>
+
+      <!-- Submit & Live Progress Bar -->
+      <div class="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-700/60">
+        <div id="bt-feedback" class="text-xs text-slate-400"></div>
+        <div class="flex items-center gap-2">
+          <button type="button" id="bt-cancel-btn" onclick="cancelActiveBacktest()" class="hidden px-3.5 py-2 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 text-xs font-semibold transition">
+            Cancel Run
+          </button>
+          <button type="submit" id="bt-submit-btn" class="px-5 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold tracking-wide transition shadow-lg shadow-sky-600/25">
+            Run Automated Backtest
+          </button>
+        </div>
+      </div>
+
+      <div id="bt-progress-wrap" class="hidden space-y-1.5">
+        <div class="flex items-center justify-between text-xs">
+          <span id="bt-progress-msg" class="text-sky-300 font-medium">Starting...</span>
+          <span id="bt-progress-pct" class="font-mono text-slate-300">0%</span>
+        </div>
+        <div class="w-full h-2 rounded-full bg-slate-900 overflow-hidden border border-slate-700">
+          <div id="bt-progress-bar" class="h-full bg-gradient-to-r from-sky-500 to-indigo-500 transition-all duration-300" style="width: 0%"></div>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- Side-by-Side Run Comparison Banner (Shown when compare_run is active) -->
+  {% if selected_run and compare_run and selected_run.summary and compare_run.summary %}
+  {% set sa = selected_run.summary %}
+  {% set sb = compare_run.summary %}
+  <div class="bg-indigo-950/30 border border-indigo-500/40 rounded-xl p-4 space-y-3">
+    <div class="flex items-center justify-between">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-indigo-300">
+        Side-by-Side Comparison: <span class="text-white">{{ selected_run.name }}</span> vs. <span class="text-slate-300">{{ compare_run.name }}</span>
+      </h2>
+      <a href="/backtest?run_id={{ selected_run.id }}" class="text-xs text-slate-400 hover:text-white">&times; Clear Compare</a>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-2 text-xs font-mono">
+      <div class="bg-slate-900/70 rounded-lg p-2.5 border border-slate-700/60">
+        <div class="text-[10px] text-slate-400 font-sans">Total Return</div>
+        <div class="text-white font-bold">{{ "%+.2f"|format(sa.total_return_pct) }}% vs {{ "%+.2f"|format(sb.total_return_pct) }}%</div>
+        <div class="text-[11px] {% if sa.total_return_pct - sb.total_return_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+          &Delta; {{ "%+.2f"|format(sa.total_return_pct - sb.total_return_pct) }}%
+        </div>
+      </div>
+      <div class="bg-slate-900/70 rounded-lg p-2.5 border border-slate-700/60">
+        <div class="text-[10px] text-slate-400 font-sans">Max Drawdown</div>
+        <div class="text-white font-bold">-{{ "%.2f"|format(sa.max_drawdown_pct) }}% vs -{{ "%.2f"|format(sb.max_drawdown_pct) }}%</div>
+        <div class="text-[11px] {% if sa.max_drawdown_pct <= sb.max_drawdown_pct %}text-emerald-400{% else %}text-rose-400{% endif %}">
+          &Delta; {{ "%+.2f"|format(sa.max_drawdown_pct - sb.max_drawdown_pct) }}%
+        </div>
+      </div>
+      <div class="bg-slate-900/70 rounded-lg p-2.5 border border-slate-700/60">
+        <div class="text-[10px] text-slate-400 font-sans">Sharpe Ratio</div>
+        <div class="text-white font-bold">{{ "%.2f"|format(sa.sharpe_ratio) }} vs {{ "%.2f"|format(sb.sharpe_ratio) }}</div>
+        <div class="text-[11px] {% if sa.sharpe_ratio >= sb.sharpe_ratio %}text-emerald-400{% else %}text-rose-400{% endif %}">
+          &Delta; {{ "%+.2f"|format(sa.sharpe_ratio - sb.sharpe_ratio) }}
+        </div>
+      </div>
+      <div class="bg-slate-900/70 rounded-lg p-2.5 border border-slate-700/60">
+        <div class="text-[10px] text-slate-400 font-sans">Expectancy (R)</div>
+        <div class="text-white font-bold">{{ "%+.3f"|format(sa.expectancy_r) }}R vs {{ "%+.3f"|format(sb.expectancy_r) }}R</div>
+        <div class="text-[11px] {% if sa.expectancy_r >= sb.expectancy_r %}text-emerald-400{% else %}text-rose-400{% endif %}">
+          &Delta; {{ "%+.3f"|format(sa.expectancy_r - sb.expectancy_r) }}R
+        </div>
+      </div>
+      <div class="bg-slate-900/70 rounded-lg p-2.5 border border-slate-700/60">
+        <div class="text-[10px] text-slate-400 font-sans">Profit Factor</div>
+        <div class="text-white font-bold">{{ "%.2f"|format(sa.profit_factor) }} vs {{ "%.2f"|format(sb.profit_factor) }}</div>
+        <div class="text-[11px] {% if sa.profit_factor >= sb.profit_factor %}text-emerald-400{% else %}text-rose-400{% endif %}">
+          &Delta; {{ "%+.2f"|format(sa.profit_factor - sb.profit_factor) }}
+        </div>
+      </div>
+      <div class="bg-slate-900/70 rounded-lg p-2.5 border border-slate-700/60">
+        <div class="text-[10px] text-slate-400 font-sans">Trades / WR</div>
+        <div class="text-white font-bold">{{ sa.total_trades }} ({{ "%.1f"|format(sa.win_rate_pct) }}%)</div>
+        <div class="text-[11px] text-slate-400">vs {{ sb.total_trades }} ({{ "%.1f"|format(sb.win_rate_pct) }}%)</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Selected Run Tearsheet -->
+  {% if selected_run and selected_run.status == 'COMPLETED' and selected_run.summary %}
+  {% set s = selected_run.summary %}
+  {% set rep = selected_run.report %}
+  {% set cum = rep.cumulative_trades_metrics %}
+  {% set funnel = rep.signal_funnel %}
+
+  <div class="space-y-5">
+    <!-- Run Title & Export Actions -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+      <div>
+        <div class="flex flex-wrap items-center gap-2">
+          <h2 class="text-lg font-bold text-white">{{ selected_run.name }}</h2>
+          <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ selected_run.mode }}</span>
+          <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">{{ selected_run.feed }}</span>
+          <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+            Health {{ s.health_score }}/100 ({{ s.health_grade }})
+          </span>
+        </div>
+        <p class="text-xs text-slate-400 font-mono mt-0.5">
+          {{ selected_run.start_date }} &rarr; {{ selected_run.end_date }} ({{ s.trading_days }} trading days) &bull; Run ID: {{ selected_run.id }}
+        </p>
+      </div>
+      <div class="flex items-center gap-2">
+        <a href="/api/backtest/runs/{{ selected_run.id }}/trades.csv" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition">Export Trades CSV</a>
+        <a href="/api/backtest/runs/{{ selected_run.id }}/report.json" target="_blank" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-medium transition">Report JSON</a>
+      </div>
+    </div>
+
+    <!-- 6-Card KPI Strip -->
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+        <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Ending Equity / ROI</div>
+        <div class="mt-1 text-lg font-bold font-mono text-white">${{ "{:,.2f}".format(s.ending_equity) }}</div>
+        <div class="text-xs font-mono {% if s.total_return_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+          {{ "%+.2f"|format(s.total_return_pct) }}% (CAGR {{ "%+.1f"|format(s.cagr_pct) }}%)
+        </div>
+      </div>
+
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+        <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Alpha vs SPY</div>
+        <div class="mt-1 text-lg font-bold font-mono {% if s.alpha_vs_spy_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+          {{ "%+.2f"|format(s.alpha_vs_spy_pct) }}%
+        </div>
+        <div class="text-[11px] font-mono text-slate-400">SPY: {{ "%+.2f"|format(s.spy_total_return_pct) }}%</div>
+      </div>
+
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+        <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Expectancy / WR</div>
+        <div class="mt-1 text-lg font-bold font-mono {% if s.expectancy_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+          {{ "%+.3f"|format(s.expectancy_r) }}R
+        </div>
+        <div class="text-[11px] font-mono text-slate-400">WR {{ "%.1f"|format(s.win_rate_pct) }}% &bull; R:R {{ "%.2f"|format(s.realized_rr_r) }}:1</div>
+      </div>
+
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+        <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Sharpe / Profit Factor</div>
+        <div class="mt-1 text-lg font-bold font-mono text-sky-400">{{ "%.2f"|format(s.sharpe_ratio) }}</div>
+        <div class="text-[11px] font-mono text-slate-400">PF {{ "%.2f"|format(s.profit_factor) }} &bull; Sortino {{ "%.2f"|format(s.sortino_ratio) }}</div>
+      </div>
+
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+        <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Max DD / RoR (-20%)</div>
+        <div class="mt-1 text-lg font-bold font-mono text-rose-400">-{{ "%.2f"|format(s.max_drawdown_pct) }}%</div>
+        <div class="text-[11px] font-mono text-slate-400">
+          RoR: {% if s.ror_20_mc is not none %}{{ "%.1f"|format(s.ror_20_mc) }}% MC{% else %}N/A{% endif %}
+        </div>
+      </div>
+
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+        <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Trades / Net R</div>
+        <div class="mt-1 text-lg font-bold font-mono text-white">{{ s.total_trades }}</div>
+        <div class="text-[11px] font-mono text-slate-400">
+          Net {{ "%+.1f"|format(s.total_r) }}R &bull; Exp {{ s.expired_orders }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Interactive Equity Curve vs SPY & Underwater Drawdown -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="lg:col-span-2 bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+        <div class="flex items-center justify-between mb-2">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-white">Equity Curve vs. SPY Buy-and-Hold</h3>
+          <div class="flex items-center gap-3 text-[11px] font-mono">
+            <span class="text-sky-400">&mdash; pTrading Equity</span>
+            <span class="text-slate-400">&mdash; SPY Benchmark</span>
+          </div>
+        </div>
+        <div id="bt-equity-chart" class="w-full h-72"></div>
+      </div>
+
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-3">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-white">Exit Breakdown &amp; Signal Funnel</h3>
+        <div class="space-y-1.5 text-xs font-mono">
+          <div class="flex justify-between"><span class="text-slate-400">Total Signals Detected</span><span class="text-white">{{ funnel.total_signals }}</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Approved &rarr; Queued</span><span class="text-emerald-400">{{ funnel.approved_signals }}</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Rejected by Risk/Caps</span><span class="text-amber-300">{{ funnel.rejected_signals }}</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Stale Limit Expired (3m)</span><span class="text-slate-300">{{ funnel.expired_stale_orders }}</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">Circuit Breaker Days</span><span class="text-rose-400">{{ funnel.circuit_breaker_days }}</span></div>
+          <div class="flex justify-between"><span class="text-slate-400">FOMC Pre-Event Flattens</span><span class="text-indigo-300">{{ funnel.fomc_flattened_positions or 0 }}</span></div>
+        </div>
+
+        <div class="border-t border-slate-700/60 pt-2.5 space-y-1 text-xs font-mono">
+          <div class="text-[10px] uppercase text-slate-400 font-sans font-semibold mb-1">Trade Outcomes</div>
+          <div class="flex justify-between"><span class="text-emerald-400">Wins / Losses / BE</span><span>{{ cum.wins }}W / {{ cum.losses }}L / {{ cum.breakevens }}BE</span></div>
+          {% if cum.breakeven_audit %}
+          <div class="flex justify-between"><span class="text-slate-400">BE Choked Winners</span><span class="text-amber-300">{{ cum.breakeven_audit.choked_winners_count }}/{{ cum.breakeven_audit.stopped_at_be }} ({{ "%.0f"|format(cum.breakeven_audit.choked_winners_pct) }}%)</span></div>
+          {% endif %}
+          {% if cum.mfe_mae and cum.mfe_mae.avg_mfe_r is not none %}
+          <div class="flex justify-between"><span class="text-slate-400">Avg MFE / MAE</span><span>+{{ "%.2f"|format(cum.mfe_mae.avg_mfe_r) }}R / -{{ "%.2f"|format(cum.mfe_mae.avg_mae_r) }}R</span></div>
+          {% endif %}
+        </div>
+
+        {% if rep.regime_breakdown %}
+        <div class="border-t border-slate-700/60 pt-2.5 space-y-1 text-xs font-mono">
+          <div class="text-[10px] uppercase text-slate-400 font-sans font-semibold mb-1">Market Regime Split</div>
+          {% for reg, st in rep.regime_breakdown.items() %}
+          <div class="flex justify-between">
+            <span class="text-slate-300">{{ reg }} ({{ st.days }}d)</span>
+            <span class="{% if st.total_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.1f"|format(st.total_r) }}R ({{ st.trades }}t)</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Monthly Returns & AI Strategy Review -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <!-- Monthly Returns Table -->
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-white mb-3">Monthly Compounded Returns</h3>
+        <div class="max-h-72 overflow-y-auto">
+          <table class="w-full text-xs font-mono">
+            <thead class="text-[10px] uppercase text-slate-400 border-b border-slate-700">
+              <tr>
+                <th class="text-left py-1.5">Month</th>
+                <th class="text-right py-1.5">Trades</th>
+                <th class="text-right py-1.5">P&amp;L</th>
+                <th class="text-right py-1.5">ROI</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/40">
+              {% for m in rep.monthly_returns %}
+              <tr>
+                <td class="py-1.5 text-slate-300">{{ m.month }}</td>
+                <td class="py-1.5 text-right text-slate-400">{{ m.trades }}</td>
+                <td class="py-1.5 text-right {% if m.pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.0f"|format(m.pnl) | replace("+", "+$") | replace("-", "-$") }}</td>
+                <td class="py-1.5 text-right font-semibold {% if m.roi_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(m.roi_pct) }}%</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Strategy Reviewer Diagnostics -->
+      <div class="lg:col-span-2 bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-white">Automated Strategy Diagnostics &amp; Review</h3>
+          <span class="text-[10px] uppercase px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-semibold">{{ selected_run.review_source }}</span>
+        </div>
+        <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
+          {% for d in selected_run.diagnostics %}
+          <div class="p-3 rounded-lg bg-slate-900/70 border {% if d.severity == 'ACTION' %}border-rose-500/40{% elif d.severity == 'WATCH' %}border-amber-500/40{% else %}border-slate-700/60{% endif %}">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs font-bold text-white">[{{ d.severity }}] {{ d.title }}</span>
+              <span class="text-[10px] font-mono text-slate-400">n={{ d.sample_size }} &bull; {{ d.config_knob }}</span>
+            </div>
+            <p class="text-xs text-slate-300 mt-1">{{ d.evidence }}</p>
+            <p class="text-[11px] text-sky-300 mt-1">&rarr; {{ d.recommendation }}</p>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Simulated Trade Log (Clickable for 5m Candlestick Modal) -->
+    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden">
+      <div class="px-5 py-3 border-b border-slate-700/60 flex items-center justify-between">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-white">Simulated Trade Log ({{ selected_run.trades | length }} trades &mdash; Click any symbol for 5m chart)</h3>
+      </div>
+      <div class="overflow-x-auto max-h-96 overflow-y-auto">
+        <table class="w-full text-xs font-mono">
+          <thead class="bg-slate-900/80 text-[10px] uppercase text-slate-400 sticky top-0">
+            <tr>
+              <th class="text-left px-3 py-2">Date</th>
+              <th class="text-left px-3 py-2">Symbol</th>
+              <th class="text-right px-3 py-2">Qty</th>
+              <th class="text-right px-3 py-2">Entry</th>
+              <th class="text-right px-3 py-2">Init Stop</th>
+              <th class="text-right px-3 py-2">Exit</th>
+              <th class="text-right px-3 py-2">P&amp;L ($)</th>
+              <th class="text-right px-3 py-2">P&amp;L (R)</th>
+              <th class="text-left px-3 py-2">Reason</th>
+              <th class="text-right px-3 py-2">MFE/MAE</th>
+              <th class="text-right px-3 py-2">RVOL</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-700/40">
+            {% for t in selected_run.trades[:200] %}
+            <tr class="hover:bg-slate-700/30 transition">
+              <td class="px-3 py-2 text-slate-400">{{ t.trade_date }}</td>
+              <td class="px-3 py-2">
+                <button type="button" onclick="openBacktestTradeChart('{{ selected_run.id }}', {{ t.id }})" class="font-bold text-sky-400 hover:text-sky-300 underline decoration-sky-500/40">
+                  {{ t.symbol }}
+                </button>
+              </td>
+              <td class="px-3 py-2 text-right text-slate-300">{{ t.qty }}</td>
+              <td class="px-3 py-2 text-right text-slate-200">${{ "%.2f"|format(t.entry_price or 0) }}</td>
+              <td class="px-3 py-2 text-right text-slate-400">${{ "%.2f"|format(t.initial_stop_price or 0) }}</td>
+              <td class="px-3 py-2 text-right text-slate-200">${{ "%.2f"|format(t.exit_price or 0) }}</td>
+              <td class="px-3 py-2 text-right font-semibold {% if (t.pnl_dollars or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+                {{ "%+.2f"|format(t.pnl_dollars or 0) | replace("+", "+$") | replace("-", "-$") }}
+              </td>
+              <td class="px-3 py-2 text-right font-semibold {% if (t.pnl_r or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+                {{ "%+.2f"|format(t.pnl_r or 0) }}R
+              </td>
+              <td class="px-3 py-2">
+                <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">{{ t.exit_reason }}</span>
+              </td>
+              <td class="px-3 py-2 text-right text-slate-400">+{{ "%.1f"|format(t.mfe_r or 0) }} / -{{ "%.1f"|format(t.mae_r or 0) }}</td>
+              <td class="px-3 py-2 text-right text-slate-400">{{ "%.1f"|format(t.signal_rvol or 0) }}x</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% elif selected_run and selected_run.status == 'FAILED' %}
+  <div class="bg-rose-950/30 border border-rose-500/40 rounded-xl p-4 text-xs text-rose-200">
+    <strong>Run {{ selected_run.id }} Failed:</strong> {{ selected_run.error_message }}
+  </div>
+  {% endif %}
+
+  <!-- Saved Backtest Run History Table -->
+  <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden">
+    <div class="px-5 py-3 border-b border-slate-700/60 flex items-center justify-between">
+      <h2 class="text-xs font-bold uppercase tracking-wider text-white">Saved Backtest History (UI &amp; CLI Runs)</h2>
+      <span class="text-[11px] text-slate-400">{{ runs | length }} run(s) stored in data/backtest.db</span>
+    </div>
+    {% if runs %}
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead class="bg-slate-900/70 text-[10px] uppercase text-slate-400">
+          <tr>
+            <th class="text-left px-4 py-2.5">Name / Window</th>
+            <th class="text-left px-3 py-2.5">Mode / Feed</th>
+            <th class="text-left px-3 py-2.5">Status</th>
+            <th class="text-right px-3 py-2.5">Return</th>
+            <th class="text-right px-3 py-2.5">Alpha</th>
+            <th class="text-right px-3 py-2.5">Max DD</th>
+            <th class="text-right px-3 py-2.5">Sharpe</th>
+            <th class="text-right px-3 py-2.5">Trades / Exp</th>
+            <th class="text-right px-4 py-2.5">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-700/50 font-mono">
+          {% for r in runs %}
+          {% set rs = r.summary %}
+          <tr class="{% if selected_run and r.id == selected_run.id %}bg-sky-500/10{% else %}hover:bg-slate-700/30{% endif %}">
+            <td class="px-4 py-2.5 font-sans">
+              <a href="/backtest?run_id={{ r.id }}" class="font-semibold text-white hover:text-sky-400">{{ r.name }}</a>
+              <div class="text-[11px] font-mono text-slate-400">{{ r.start_date }} &rarr; {{ r.end_date }}</div>
+            </td>
+            <td class="px-3 py-2.5 uppercase text-slate-300">{{ r.mode }} / {{ r.feed }}</td>
+            <td class="px-3 py-2.5">
+              <span class="text-[10px] px-2 py-0.5 rounded font-semibold
+                {% if r.status == 'COMPLETED' %}bg-emerald-500/15 text-emerald-300
+                {% elif r.status == 'RUNNING' or r.status == 'QUEUED' %}bg-sky-500/15 text-sky-300
+                {% else %}bg-rose-500/15 text-rose-300{% endif %}">
+                {{ r.status }}
+              </span>
+            </td>
+            <td class="px-3 py-2.5 text-right {% if (rs.total_return_pct or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+              {% if rs.total_return_pct is defined %}{{ "%+.2f"|format(rs.total_return_pct) }}%{% else %}&mdash;{% endif %}
+            </td>
+            <td class="px-3 py-2.5 text-right {% if (rs.alpha_vs_spy_pct or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+              {% if rs.alpha_vs_spy_pct is defined %}{{ "%+.2f"|format(rs.alpha_vs_spy_pct) }}%{% else %}&mdash;{% endif %}
+            </td>
+            <td class="px-3 py-2.5 text-right text-rose-400">
+              {% if rs.max_drawdown_pct is defined %}-{{ "%.2f"|format(rs.max_drawdown_pct) }}%{% else %}&mdash;{% endif %}
+            </td>
+            <td class="px-3 py-2.5 text-right text-sky-400">
+              {% if rs.sharpe_ratio is defined %}{{ "%.2f"|format(rs.sharpe_ratio) }}{% else %}&mdash;{% endif %}
+            </td>
+            <td class="px-3 py-2.5 text-right text-slate-300">
+              {% if rs.total_trades is defined %}{{ rs.total_trades }} ({{ "%+.2f"|format(rs.expectancy_r) }}R){% else %}&mdash;{% endif %}
+            </td>
+            <td class="px-4 py-2.5 text-right space-x-1.5 font-sans">
+              <a href="/backtest?run_id={{ r.id }}" class="text-sky-400 hover:underline">View</a>
+              {% if selected_run and r.id != selected_run.id and r.status == 'COMPLETED' %}
+              <a href="/backtest?run_id={{ selected_run.id }}&compare_id={{ r.id }}" class="text-indigo-300 hover:underline">Compare</a>
+              {% endif %}
+              <button type="button" onclick="deleteRun('{{ r.id }}')" class="text-rose-400 hover:underline">Delete</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="p-8 text-center text-xs text-slate-400">
+      No backtest runs saved yet. Configure parameters above and click <strong>Run Automated Backtest</strong> (or run <code class="text-sky-400">python -m backtest.cli</code>).
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  let _activeRunId = null;
+  let _pollTimer = null;
+
+  function toggleModeFields() {
+    const mode = document.getElementById("bt_mode").value;
+    const row = document.getElementById("custom-symbols-row");
+    if (mode === "fixed") row.classList.remove("hidden");
+    else row.classList.add("hidden");
+  }
+
+  async function launchBacktest(e) {
+    e.preventDefault();
+    const btn = document.getElementById("bt-submit-btn");
+    const cancelBtn = document.getElementById("bt-cancel-btn");
+    const fb = document.getElementById("bt-feedback");
+    const pWrap = document.getElementById("bt-progress-wrap");
+
+    const payload = {
+      name: document.getElementById("bt_name").value,
+      mode: document.getElementById("bt_mode").value,
+      start_date: document.getElementById("bt_start").value,
+      end_date: document.getElementById("bt_end").value,
+      feed: document.getElementById("bt_feed").value,
+      initial_capital: Number(document.getElementById("bt_capital").value),
+      risk_profile: document.getElementById("bt_risk_profile").value,
+      risk_percent_per_trade: Number(document.getElementById("bt_risk_pct").value),
+      max_basket_size: Number(document.getElementById("bt_basket_size").value),
+      custom_symbols: document.getElementById("bt_custom_symbols").value,
+      scanner_min_rvol: Number(document.getElementById("bt_rvol").value),
+      scanner_max_atr_extension: Number(document.getElementById("bt_atr_ext").value),
+      breakeven_trigger_r: Number(document.getElementById("bt_be_r").value),
+      take_profit_r: 2.0,
+      exit_slippage_bps: Number(document.getElementById("bt_slip").value),
+      enable_slot_recycling: document.getElementById("bt_slot_recycle").checked,
+      enable_health_ladder: document.getElementById("bt_health_ladder").checked,
+      enable_fomc_guard: document.getElementById("bt_fomc").checked,
+      enable_early_close_guard: document.getElementById("bt_early_close").checked,
+      enable_spy_qqq_gate: document.getElementById("bt_spy_gate").checked,
+      lock_triggered_on_reject: document.getElementById("bt_lock_reject").checked,
+      use_1m_execution: document.getElementById("bt_1m").checked,
+      enable_edgar_fundamentals: document.getElementById("bt_edgar").checked,
+      run_gemini_review: document.getElementById("bt_gemini") ? document.getElementById("bt_gemini").checked : false,
+    };
+
+    btn.disabled = true;
+    btn.textContent = "Running...";
+    fb.textContent = "";
+
+    try {
+      const res = await fetch("/api/backtest/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        fb.className = "text-xs text-rose-400 font-medium";
+        fb.textContent = data.detail || "Failed to start backtest.";
+        btn.disabled = false;
+        btn.textContent = "Run Automated Backtest";
+        return;
+      }
+
+      _activeRunId = data.run_id;
+      pWrap.classList.remove("hidden");
+      cancelBtn.classList.remove("hidden");
+      pollBacktestStatus(_activeRunId);
+    } catch (err) {
+      fb.className = "text-xs text-rose-400";
+      fb.textContent = `Network error: ${err.message}`;
+      btn.disabled = false;
+      btn.textContent = "Run Automated Backtest";
+    }
+  }
+
+  async function pollBacktestStatus(runId) {
+    try {
+      const res = await fetch(`/api/backtest/status/${runId}`);
+      if (!res.ok) return;
+      const d = await res.json();
+      document.getElementById("bt-progress-msg").textContent = d.progress_msg || d.status;
+      document.getElementById("bt-progress-pct").textContent = `${Math.round(d.progress_pct || 0)}%`;
+      document.getElementById("bt-progress-bar").style.width = `${Math.min(100, d.progress_pct || 0)}%`;
+
+      if (d.status === "COMPLETED") {
+        window.location.href = `/backtest?run_id=${runId}`;
+        return;
+      }
+      if (d.status === "FAILED" || d.status === "CANCELLED") {
+        const fb = document.getElementById("bt-feedback");
+        fb.className = "text-xs text-rose-400";
+        fb.textContent = d.error_message || `Run ${d.status}.`;
+        document.getElementById("bt-submit-btn").disabled = false;
+        document.getElementById("bt-submit-btn").textContent = "Run Automated Backtest";
+        document.getElementById("bt-cancel-btn").classList.add("hidden");
+        return;
+      }
+      _pollTimer = setTimeout(() => pollBacktestStatus(runId), 1200);
+    } catch (_) {
+      _pollTimer = setTimeout(() => pollBacktestStatus(runId), 2000);
+    }
+  }
+
+  async function cancelActiveBacktest() {
+    if (!_activeRunId) return;
+    await fetch(`/api/backtest/cancel/${_activeRunId}`, { method: "POST" });
+  }
+
+  async function deleteRun(runId) {
+    if (!confirm("Delete this backtest run?")) return;
+    const res = await fetch(`/api/backtest/runs/${runId}`, { method: "DELETE" });
+    if (res.ok) window.location.href = "/backtest";
+  }
+
+  // Click simulated trade symbol -> render 5m bars in shared Lightweight Charts modal
+  async function openBacktestTradeChart(runId, tradeId) {
+    const modal = document.getElementById("symbol-chart-modal");
+    const symEl = document.getElementById("chart-modal-symbol");
+    const dateEl = document.getElementById("chart-modal-date");
+    const badgeEl = document.getElementById("chart-modal-trade-badge");
+    const legendEl = document.getElementById("chart-modal-legend");
+    const statusEl = document.getElementById("chart-modal-status");
+    const canvasEl = document.getElementById("chart-modal-canvas");
+
+    if (_ptChartInstance) { _ptChartInstance.remove(); _ptChartInstance = null; }
+    canvasEl.innerHTML = "";
+    canvasEl.classList.add("hidden");
+    statusEl.textContent = "Loading simulated trade 5m chart from cache...";
+    statusEl.classList.remove("hidden");
+    modal.classList.remove("hidden");
+    modal.classList.add("flex");
+
+    try {
+      const res = await fetch(`/api/backtest/runs/${runId}/chart/${tradeId}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      symEl.textContent = `${data.symbol} (Simulated)`;
+      dateEl.textContent = `${data.date} (5m ET)`;
+
+      if (!data.candles || data.candles.length === 0) {
+        statusEl.textContent = `No cached 5m bars available for ${data.symbol} on ${data.date}.`;
+        return;
+      }
+
+      statusEl.classList.add("hidden");
+      canvasEl.classList.remove("hidden");
+
+      _ptChartInstance = LightweightCharts.createChart(canvasEl, {
+        layout: { background: { color: "#0f172a" }, textColor: "#94a3b8" },
+        grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
+        rightPriceScale: { borderColor: "#334155" },
+        timeScale: { borderColor: "#334155", timeVisible: true, secondsVisible: false },
+        width: canvasEl.clientWidth,
+        height: 384,
+      });
+
+      const cs = _ptChartInstance.addCandlestickSeries({
+        upColor: "#10b981", downColor: "#f43f5e", borderVisible: false, wickUpColor: "#10b981", wickDownColor: "#f43f5e",
+      });
+      cs.setData(data.candles);
+
+      if (data.vwap && data.vwap.length) {
+        const vs = _ptChartInstance.addLineSeries({ color: "#f59e0b", lineWidth: 2, priceLineVisible: false });
+        vs.setData(data.vwap);
+      }
+
+      const tr = data.trade;
+      const parts = ['<span class="text-amber-400">&mdash; VWAP</span>'];
+      if (data.or_high) { cs.createPriceLine({ price: data.or_high, color: "#22c55e", lineWidth: 1, lineStyle: 2, title: "OR High" }); parts.push(`<span class="text-emerald-400">ORH $${Number(data.or_high).toFixed(2)}</span>`); }
+      if (data.or_low) { cs.createPriceLine({ price: data.or_low, color: "#ef4444", lineWidth: 1, lineStyle: 2, title: "OR Low" }); parts.push(`<span class="text-rose-400">ORL $${Number(data.or_low).toFixed(2)}</span>`); }
+      if (tr.entry_price) { cs.createPriceLine({ price: tr.entry_price, color: "#38bdf8", lineWidth: 2, title: "Entry" }); parts.push(`<span class="text-sky-400">Entry $${Number(tr.entry_price).toFixed(2)}</span>`); }
+      if (tr.initial_stop_price) { cs.createPriceLine({ price: tr.initial_stop_price, color: "#fb7185", lineWidth: 1, lineStyle: 3, title: "Init Stop" }); }
+      if (tr.take_profit_price) { cs.createPriceLine({ price: tr.take_profit_price, color: "#2dd4bf", lineWidth: 1, lineStyle: 3, title: "TP +2R" }); }
+      if (tr.exit_price) { cs.createPriceLine({ price: tr.exit_price, color: "#c084fc", lineWidth: 2, lineStyle: 2, title: tr.exit_reason || "Exit" }); parts.push(`<span class="text-purple-300">Exit $${Number(tr.exit_price).toFixed(2)} (${tr.exit_reason})</span>`); }
+
+      const pVal = Number(tr.pnl_dollars || 0);
+      const rVal = Number(tr.pnl_r || 0);
+      badgeEl.textContent = `${pVal >= 0 ? "+$" : "-$"}${Math.abs(pVal).toFixed(2)} (${rVal >= 0 ? "+" : "-"}${Math.abs(rVal).toFixed(2)}R)`;
+      badgeEl.className = `text-xs font-mono px-2.5 py-0.5 rounded-full border ${pVal >= 0 ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" : "bg-rose-500/15 text-rose-300 border-rose-500/40"}`;
+      legendEl.innerHTML = parts.join(" &bull; ");
+      _ptChartInstance.timeScale().fitContent();
+    } catch (err) {
+      statusEl.textContent = `Could not load trade chart: ${err.message}`;
+    }
+  }
+
+  // Render Equity Curve vs SPY when a completed run is displayed
+  {% if selected_run and selected_run.status == 'COMPLETED' and selected_run.report and selected_run.report.roi_equity and selected_run.report.roi_equity.equity_curve %}
+  document.addEventListener("DOMContentLoaded", () => {
+    const el = document.getElementById("bt-equity-chart");
+    if (!el || !window.LightweightCharts) return;
+    const curve = {{ selected_run.report.roi_equity.equity_curve | tojson }};
+    if (!curve.length) return;
+
+    const chart = LightweightCharts.createChart(el, {
+      layout: { background: { color: "#0f172a" }, textColor: "#94a3b8" },
+      grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
+      rightPriceScale: { borderColor: "#334155" },
+      timeScale: { borderColor: "#334155" },
+      width: el.clientWidth,
+      height: 288,
+    });
+
+    const eqSeries = chart.addAreaSeries({
+      lineColor: "#38bdf8",
+      topColor: "rgba(56, 189, 248, 0.25)",
+      bottomColor: "rgba(56, 189, 248, 0.01)",
+      lineWidth: 2,
+    });
+    eqSeries.setData(curve.map(pt => ({ time: pt.date, value: pt.equity })));
+
+    const spySeries = chart.addLineSeries({
+      color: "#94a3b8",
+      lineWidth: 1,
+      lineStyle: 2,
+    });
+    spySeries.setData(curve.map(pt => ({ time: pt.date, value: pt.spy_equity })));
+    chart.timeScale().fitContent();
+  });
+  {% endif %}
+</script>
+{% endblock %}

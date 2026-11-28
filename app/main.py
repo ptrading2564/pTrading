@@ -12,6 +12,7 @@ import logging
 from app.brokers.alpaca_adapter import AlpacaAdapter
 from app.config import settings
 from app.db import init_db
+from app.routers.backtest import router as backtest_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.webhook import router as webhook_router
 from app.services.lifecycle_worker import LifecycleWorker
@@ -84,6 +85,7 @@ app.add_middleware(
 
 # Include Routers
 app.include_router(dashboard_router)
+app.include_router(backtest_router)
 app.include_router(webhook_router)
 
 # Mount Static Files
