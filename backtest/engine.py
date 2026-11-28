@@ -1,8 +1,9 @@
 """Chronological event-driven portfolio backtest orchestrator for pTrading.
 
-Directly reuses live MarketScanner indicator calculations, ChartMillImporter composite
-ranking, FinancingService drawdown health ladder, AnalyticsService metrics/Monte Carlo,
-and StrategyReviewer diagnostics — strictly read-only without mutating live services or DB.
+Features month-scoped smart intraday bar loading (drastically lowering RAM & API calls
+on multi-year Mode A backtests), optional experiment filters (custom entry cutoff,
+midday blackout, SPY daily EMA20 trend filter), and 100% read-only reuse of live
+MarketScanner, ChartMillImporter, FinancingService, AnalyticsService, and StrategyReviewer.
 """
 
 from __future__ import annotations
@@ -52,6 +53,28 @@ def _classify_market_regime(spy_ret_pct: Optional[float], qqq_ret_pct: Optional[
     if avg_r <= -0.35:
         return "TREND_DOWN"
     return "CHOP"
+
+
+def _compute_spy_above_ema20_by_date(spy_daily_bars: List[Bar], tz: ZoneInfo) -> Dict[str, bool]:
+    """Point-in-time SPY daily trend flag: for day T, checks if day T-1 close > EMA(20) (zero look-ahead)."""
+    sorted_b = sorted(spy_daily_bars, key=lambda b: b.timestamp)
+    if len(sorted_b) < 21:
+        return {}
+    alpha = 2.0 / (20.0 + 1.0)
+    ema = sum(b.close for b in sorted_b[:20]) / 20.0
+    # Compute status after each bar i, then apply strictly to bar i+1's date!
+    status_after_bar: List[Tuple[str, bool]] = []
+    for i in range(20, len(sorted_b)):
+        c = sorted_b[i].close
+        ema = (c * alpha) + (ema * (1.0 - alpha))
+        d_str = sorted_b[i].timestamp.astimezone(tz).strftime("%Y-%m-%d")
+        status_after_bar.append((d_str, c >= ema))
+
+    out: Dict[str, bool] = {}
+    for i in range(1, len(status_after_bar)):
+        # Day T uses strictly day T-1's close vs EMA20
+        out[status_after_bar[i][0]] = status_after_bar[i - 1][1]
+    return out
 
 
 class BacktestEngine:
@@ -114,7 +137,7 @@ class BacktestEngine:
 
             _check_cancel()
 
-            # Step 1: Load 1Day bars for screener & SPY/QQQ daily returns
+            # Step 1: Load 1Day bars for screener & SPY/QQQ daily returns/EMA20
             daily_lookback_start = datetime.combine(start_d - timedelta(days=400), time(0, 0), tzinfo=self.tz)
             daily_end = datetime.combine(end_d + timedelta(days=1), time(23, 59), tzinfo=self.tz)
 
@@ -134,124 +157,144 @@ class BacktestEngine:
 
             _check_cancel()
 
-            # Build point-in-time daily baskets across all trading days
-            await _report_progress(18.0, "Running point-in-time daily pre-market screener...")
+            # Step 2: Build point-in-time daily baskets across all trading days
+            await _report_progress(14.0, "Running point-in-time daily pre-market screener...")
             edgar = EdgarFundamentalProvider() if self.cfg.enable_edgar_fundamentals else None
             screener = ScreenerSimulator(self.cfg, daily_bars, edgar_provider=edgar)
 
             baskets_by_day: Dict[str, List[ScreenedCandidate]] = {}
-            all_needed_intraday_syms: set[str] = {"SPY", "QQQ"}
             for d_str in trading_dates:
-                d_obj = date.fromisoformat(d_str)
-                basket = screener.screen_for_date(d_obj)
-                baskets_by_day[d_str] = basket
-                for cand in basket:
-                    all_needed_intraday_syms.add(cand.symbol)
+                baskets_by_day[d_str] = screener.screen_for_date(date.fromisoformat(d_str))
 
-            _check_cancel()
-
-            # Step 2: Fetch 5Min bars (with 5-day lookback before start_d for ATR/RVOL warmup)
-            intra_start = datetime.combine(start_d - timedelta(days=5), time(9, 30), tzinfo=self.tz)
-            intra_end = datetime.combine(end_d, time(16, 5), tzinfo=self.tz)
-            sorted_intra_syms = sorted(all_needed_intraday_syms)
-
-            await _report_progress(
-                22.0,
-                f"Loading 5Min ({self.cfg.feed.upper()}) bars for {len(sorted_intra_syms)} active symbols...",
-            )
-            bars_5m_all = await self.data_store.get_bars(
-                symbols=sorted_intra_syms,
-                timeframe="5Min",
-                start_dt=intra_start,
-                end_dt=intra_end,
-                feed=self.cfg.feed,
-            )
-
-            _check_cancel()
-
-            # Step 3: Fetch 1Min bars for active symbols (excluding SPY/QQQ unless in basket)
-            bars_1m_all: Dict[str, List[Bar]] = {}
-            if self.cfg.use_1m_execution:
-                exec_syms = sorted(s for s in all_needed_intraday_syms if s not in ("SPY", "QQQ"))
-                if exec_syms:
-                    await _report_progress(
-                        45.0,
-                        f"Loading 1Min ({self.cfg.feed.upper()}) execution bars for {len(exec_syms)} symbols...",
-                    )
-                    bars_1m_all = await self.data_store.get_bars(
-                        symbols=exec_syms,
-                        timeframe="1Min",
-                        start_dt=datetime.combine(start_d, time(9, 30), tzinfo=self.tz),
-                        end_dt=intra_end,
-                        feed=self.cfg.feed,
-                    )
-
-            _check_cancel()
-
-            # Pre-index 5m and 1m bars by trading date for fast chronological day-by-day replay
-            bars_5m_by_day_sym = self._index_bars_by_day(bars_5m_all)
-            bars_1m_by_day_sym = self._index_bars_by_day(bars_1m_all) if bars_1m_all else {}
             daily_ret_spy = self._compute_daily_returns_map(daily_bars.get("SPY", []))
             daily_ret_qqq = self._compute_daily_returns_map(daily_bars.get("QQQ", []))
+            spy_above_ema20 = _compute_spy_above_ema20_by_date(daily_bars.get("SPY", []), self.tz)
 
-            # Step 4: Chronological Day-by-Day Portfolio Replay
+            # Group trading dates by YYYY-MM for memory-efficient month-by-month intraday loading & replay
+            months_ordered: List[str] = []
+            dates_by_month: Dict[str, List[str]] = {}
+            for d_str in trading_dates:
+                ym = d_str[:7]
+                if ym not in dates_by_month:
+                    months_ordered.append(ym)
+                    dates_by_month[ym] = []
+                dates_by_month[ym].append(d_str)
+
             broker = SimulatedPortfolioBroker(self.cfg)
             daily_equity_rows: List[Dict[str, Any]] = []
             rolling_5m_history: Dict[str, List[Bar]] = {}
+            n_months = max(1, len(months_ordered))
 
-            # Seed rolling 5m history with pre-start warmup bars (strictly before start_d)
-            start_str = start_d.strftime("%Y-%m-%d")
-            for sym, sym_bars in bars_5m_all.items():
-                warmup = [b for b in sym_bars if b.timestamp.astimezone(self.tz).strftime("%Y-%m-%d") < start_str]
-                if warmup:
-                    rolling_5m_history[sym] = warmup[-40:]
-
-            n_days = len(trading_dates)
-            for day_idx, d_str in enumerate(trading_dates):
+            for m_idx, ym in enumerate(months_ordered):
                 _check_cancel()
-                if day_idx == 0 or day_idx % max(1, n_days // 20) == 0:
-                    pct = 62.0 + (day_idx / max(1, n_days)) * 30.0
-                    await _report_progress(pct, f"Simulating session {day_idx + 1}/{n_days} ({d_str})...")
+                m_dates = dates_by_month[ym]
+                m_start_d = date.fromisoformat(m_dates[0])
+                m_end_d = date.fromisoformat(m_dates[-1])
 
-                day_obj = date.fromisoformat(d_str)
-                sess = sessions_map[d_str]
-                basket = baskets_by_day.get(d_str, [])
+                month_syms = sorted(
+                    {"SPY", "QQQ"}
+                    | {cand.symbol for d_s in m_dates for cand in baskets_by_day.get(d_s, [])}
+                )
+                base_pct = 16.0 + (m_idx / n_months) * 76.0
 
-                self._simulate_single_session(
-                    day_obj=day_obj,
-                    d_str=d_str,
-                    sess=sess,
-                    basket=basket,
-                    bars_5m_today=bars_5m_by_day_sym.get(d_str, {}),
-                    bars_1m_today=bars_1m_by_day_sym.get(d_str, {}),
-                    rolling_5m_history=rolling_5m_history,
-                    broker=broker,
+                await _report_progress(
+                    base_pct,
+                    f"Month {ym} ({m_idx + 1}/{n_months}): Loading 5Min bars ({len(month_syms)} active syms)...",
+                )
+                intra_start_5m = datetime.combine(m_start_d - timedelta(days=5), time(9, 30), tzinfo=self.tz)
+                intra_end = datetime.combine(m_end_d, time(16, 5), tzinfo=self.tz)
+
+                bars_5m_month = await self.data_store.get_bars(
+                    symbols=month_syms,
+                    timeframe="5Min",
+                    start_dt=intra_start_5m,
+                    end_dt=intra_end,
+                    feed=self.cfg.feed,
                 )
 
-                end_eq, daily_roi_pct, dd_pct = broker.finalize_day()
-                spy_r = daily_ret_spy.get(d_str)
-                qqq_r = daily_ret_qqq.get(d_str)
+                _check_cancel()
 
-                daily_equity_rows.append(
-                    {
-                        "date": d_str,
-                        "starting_equity": round(broker.starting_day_equity, 2),
-                        "ending_equity": round(end_eq, 2),
-                        "daily_pnl": round(end_eq - broker.starting_day_equity, 2),
-                        "daily_roi_pct": round(daily_roi_pct, 4),
-                        "drawdown_pct": round(dd_pct, 2),
-                        "health_state": broker.health_state,
-                        "trade_count": len(broker.today_closed_trades),
-                        "circuit_breaker_tripped": broker.circuit_breaker_tripped,
-                        "spy_return_pct": spy_r,
-                        "qqq_return_pct": qqq_r,
-                        "market_regime": _classify_market_regime(spy_r, qqq_r),
-                        "basket_size": len(basket),
-                    }
+                # Seed rolling 5m warmup history for any symbol not yet seeded
+                m_start_str = m_dates[0]
+                for sym, sym_bars in bars_5m_month.items():
+                    if sym not in rolling_5m_history:
+                        warmup = [b for b in sym_bars if b.timestamp.astimezone(self.tz).strftime("%Y-%m-%d") < m_start_str]
+                        if warmup:
+                            rolling_5m_history[sym] = warmup[-40:]
+
+                bars_5m_by_day_sym = self._index_bars_by_day(bars_5m_month)
+
+                # Smart 1Min fetch: only fetch 1Min bars for symbols that have >=1 potential ORB breakout bar this month!
+                bars_1m_by_day_sym: Dict[str, Dict[str, List[Bar]]] = {}
+                if self.cfg.use_1m_execution:
+                    cand_1m_syms = self._identify_breakout_candidate_symbols(
+                        m_dates, baskets_by_day, bars_5m_by_day_sym
+                    )
+                    if cand_1m_syms:
+                        await _report_progress(
+                            base_pct + (0.4 * (76.0 / n_months)),
+                            f"Month {ym} ({m_idx + 1}/{n_months}): Loading 1Min bars ({len(cand_1m_syms)} breakout syms)...",
+                        )
+                        bars_1m_month = await self.data_store.get_bars(
+                            symbols=cand_1m_syms,
+                            timeframe="1Min",
+                            start_dt=datetime.combine(m_start_d, time(9, 30), tzinfo=self.tz),
+                            end_dt=intra_end,
+                            feed=self.cfg.feed,
+                        )
+                        bars_1m_by_day_sym = self._index_bars_by_day(bars_1m_month)
+
+                await _report_progress(
+                    base_pct + (0.75 * (76.0 / n_months)),
+                    f"Month {ym} ({m_idx + 1}/{n_months}): Simulating {len(m_dates)} sessions...",
                 )
+
+                for d_str in m_dates:
+                    _check_cancel()
+                    day_obj = date.fromisoformat(d_str)
+                    sess = sessions_map[d_str]
+                    basket = baskets_by_day.get(d_str, [])
+
+                    # Optional higher-timeframe SPY > daily EMA20 filter
+                    allow_entries_today = True
+                    if self.cfg.require_spy_above_daily_ema20 and d_str in spy_above_ema20:
+                        allow_entries_today = spy_above_ema20[d_str]
+
+                    self._simulate_single_session(
+                        day_obj=day_obj,
+                        d_str=d_str,
+                        sess=sess,
+                        basket=basket if allow_entries_today else [],
+                        bars_5m_today=bars_5m_by_day_sym.get(d_str, {}),
+                        bars_1m_today=bars_1m_by_day_sym.get(d_str, {}),
+                        rolling_5m_history=rolling_5m_history,
+                        broker=broker,
+                    )
+
+                    end_eq, daily_roi_pct, dd_pct = broker.finalize_day()
+                    spy_r = daily_ret_spy.get(d_str)
+                    qqq_r = daily_ret_qqq.get(d_str)
+
+                    daily_equity_rows.append(
+                        {
+                            "date": d_str,
+                            "starting_equity": round(broker.starting_day_equity, 2),
+                            "ending_equity": round(end_eq, 2),
+                            "daily_pnl": round(end_eq - broker.starting_day_equity, 2),
+                            "daily_roi_pct": round(daily_roi_pct, 4),
+                            "drawdown_pct": round(dd_pct, 2),
+                            "health_state": broker.health_state,
+                            "trade_count": len(broker.today_closed_trades),
+                            "circuit_breaker_tripped": broker.circuit_breaker_tripped,
+                            "spy_return_pct": spy_r,
+                            "qqq_return_pct": qqq_r,
+                            "market_regime": _classify_market_regime(spy_r, qqq_r),
+                            "basket_size": len(basket),
+                        }
+                    )
 
             # Step 5: Compute full AnalyticsService + StrategyReviewer report
-            await _report_progress(94.0, "Running Monte Carlo Risk of Ruin & Strategy Reviewer...")
+            await _report_progress(94.0, "Running Monte Carlo Risk of Ruin & Deep-Dive Diagnostics...")
             funnel_stats = {
                 "total_signals": broker.total_signals,
                 "approved_signals": broker.approved_signals,
@@ -310,8 +353,37 @@ class BacktestEngine:
                 await fail_backtest_run(run_id, str(e))
             raise
 
+    def _identify_breakout_candidate_symbols(
+        self,
+        m_dates: List[str],
+        baskets_by_day: Dict[str, List[ScreenedCandidate]],
+        bars_5m_by_day_sym: Dict[str, Dict[str, List[Bar]]],
+    ) -> List[str]:
+        """Pre-scans 5m bars for the month to find symbols that actually print at least one bullish close > OR_High."""
+        candidates: set[str] = set()
+        for d_str in m_dates:
+            day_obj = date.fromisoformat(d_str)
+            or_start = datetime.combine(day_obj, time(9, 30), tzinfo=self.tz)
+            or_end = datetime.combine(day_obj, time(9, 45), tzinfo=self.tz)
+            day_bars = bars_5m_by_day_sym.get(d_str, {})
+            for cand in baskets_by_day.get(d_str, []):
+                sym = cand.symbol
+                if sym in candidates:
+                    continue
+                s_bars = day_bars.get(sym, [])
+                if not s_bars:
+                    continue
+                or_b = [b for b in s_bars if or_start <= b.timestamp.astimezone(self.tz) < or_end]
+                if not or_b:
+                    continue
+                or_h = round(max(b.high for b in or_b), 2)
+                for b in s_bars:
+                    if b.timestamp.astimezone(self.tz) >= or_end and b.close > or_h and b.close > b.open:
+                        candidates.add(sym)
+                        break
+        return sorted(candidates)
+
     def _index_bars_by_day(self, bars_all: Dict[str, List[Bar]]) -> Dict[str, Dict[str, List[Bar]]]:
-        """Indexes {symbol: [Bar]} -> {YYYY-MM-DD: {symbol: [Bar]}} filtered to regular session 09:30-16:00 ET."""
         by_day: Dict[str, Dict[str, List[Bar]]] = {}
         rth_open = time(9, 30)
         rth_close = time(16, 0)
@@ -350,7 +422,6 @@ class BacktestEngine:
     ) -> None:
         broker.start_new_day()
 
-        # Resolve official session timings (regular vs early-close vs FOMC guard)
         close_t = _parse_hhmm(sess.get("close", "16:00"), (16, 0))
         close_dt_et = datetime.combine(day_obj, close_t, tzinfo=self.tz)
 
@@ -360,6 +431,24 @@ class BacktestEngine:
         else:
             entry_cutoff_dt = datetime.combine(day_obj, time(15, 0), tzinfo=self.tz)
             flatten_dt = datetime.combine(day_obj, time(15, 55), tzinfo=self.tz)
+
+        # Optional custom entry cutoff experiment (e.g. "11:30" or "12:00")
+        if self.cfg.custom_entry_cutoff_et:
+            custom_cut = datetime.combine(day_obj, _parse_hhmm(self.cfg.custom_entry_cutoff_et, (15, 0)), tzinfo=self.tz)
+            if custom_cut < entry_cutoff_dt:
+                entry_cutoff_dt = custom_cut
+
+        # Optional midday blackout window experiment (e.g. "12:00"-"14:00")
+        blackout_start_dt = (
+            datetime.combine(day_obj, _parse_hhmm(self.cfg.midday_blackout_start_et, (12, 0)), tzinfo=self.tz)
+            if self.cfg.midday_blackout_start_et
+            else None
+        )
+        blackout_end_dt = (
+            datetime.combine(day_obj, _parse_hhmm(self.cfg.midday_blackout_end_et, (14, 0)), tzinfo=self.tz)
+            if self.cfg.midday_blackout_end_et
+            else None
+        )
 
         flatten_reason = "EOD_FLATTEN"
         if self.cfg.enable_fomc_guard and is_fomc_day_historical(day_obj):
@@ -374,24 +463,19 @@ class BacktestEngine:
         or_start_dt = datetime.combine(day_obj, time(9, 30), tzinfo=self.tz)
         or_end_dt = datetime.combine(day_obj, time(9, 45), tzinfo=self.tz)
 
-        # Build Opening Range (09:30-09:45 ET) strictly from 5m bars inside [09:30, 09:45)
         or_map: Dict[str, Tuple[float, float]] = {}
         basket_syms = [c.symbol for c in basket]
         cand_by_sym = {c.symbol: c for c in basket}
 
         for sym in basket_syms:
             sym_5m = bars_5m_today.get(sym, [])
-            or_bars = [
-                b for b in sym_5m
-                if or_start_dt <= b.timestamp.astimezone(self.tz) < or_end_dt
-            ]
+            or_bars = [b for b in sym_5m if or_start_dt <= b.timestamp.astimezone(self.tz) < or_end_dt]
             if or_bars:
                 or_map[sym] = (
                     round(max(b.high for b in or_bars), 2),
                     round(min(b.low for b in or_bars), 2),
                 )
 
-        # Build unified sorted timeline of 5m bar-start timestamps across SPY, QQQ, and basket
         all_5m_ts = sorted(
             {
                 b.timestamp.astimezone(timezone.utc)
@@ -400,12 +484,10 @@ class BacktestEngine:
             }
         )
 
-        # Pre-index today's 5m bars by (sym, ts_utc) for O(1) lookup
         map_5m: Dict[str, Dict[datetime, Bar]] = {}
         for sym in ["SPY", "QQQ"] + basket_syms:
             map_5m[sym] = {b.timestamp.astimezone(timezone.utc): b for b in bars_5m_today.get(sym, [])}
 
-        # Build chronological execution timeline (1m bars when available, else 5m bars)
         exec_bars_by_ts: Dict[datetime, Dict[str, Bar]] = {}
         for sym in basket_syms:
             src_bars = bars_1m_today.get(sym) if (self.cfg.use_1m_execution and bars_1m_today.get(sym)) else bars_5m_today.get(sym, [])
@@ -442,10 +524,8 @@ class BacktestEngine:
             bar_close_utc = ts_5m_start + timedelta(minutes=5)
             bar_close_et = bar_close_utc.astimezone(self.tz)
 
-            # First advance execution bars strictly prior to this 5m bar's close
             _advance_execution_up_to(bar_close_utc - timedelta(seconds=1))
 
-            # Append newly closed 5m bars to today's accumulator & rolling lookback history
             for sym in ["SPY", "QQQ"] + basket_syms:
                 b = map_5m[sym].get(ts_5m_start)
                 if b is not None:
@@ -456,17 +536,17 @@ class BacktestEngine:
                         del hist[:-60]
                     last_known_price[sym] = b.close
 
-            # Check flatten if bar close crossed flatten_dt without 1m bars
             if not flattened and bar_close_et >= flatten_dt:
                 broker.flatten_all(bar_close_utc, last_known_price, reason=flatten_reason)
                 flattened = True
                 continue
 
-            # Only scan for new entries strictly inside (09:45 ET, entry_cutoff_dt)
             if flattened or bar_close_et <= or_end_dt or bar_close_et >= entry_cutoff_dt:
                 continue
 
-            # Market Health Gate: SPY & QQQ >= Intraday VWAP (using live MarketScanner.calculate_intraday_vwap)
+            if blackout_start_dt and blackout_end_dt and blackout_start_dt <= bar_close_et < blackout_end_dt:
+                continue
+
             if self.cfg.enable_spy_qqq_gate:
                 spy_bars = today_5m_accum["SPY"]
                 qqq_bars = today_5m_accum["QQQ"]
@@ -477,7 +557,6 @@ class BacktestEngine:
                 if spy_bars[-1].close < spy_vwap or qqq_bars[-1].close < qqq_vwap:
                     continue
 
-            # Evaluate ranked basket symbols in composite-score priority order
             for sym in basket_syms:
                 if sym in triggered_today:
                     continue
@@ -489,7 +568,6 @@ class BacktestEngine:
                 sym_hist = rolling_5m_history.get(sym, [])
                 if len(sym_hist) < 3 or not sym_today:
                     continue
-                # Ensure this symbol actually had a bar at ts_5m_start
                 if ts_5m_start not in map_5m[sym]:
                     continue
 
@@ -498,7 +576,6 @@ class BacktestEngine:
                 o = last_bar.open
                 or_h, or_l = or_pair
 
-                # Reuse live MarketScanner indicator functions directly (100% formula parity)
                 vwap = MarketScanner.calculate_intraday_vwap(sym_today)
                 atr = MarketScanner.calculate_atr(sym_hist, period=14)
                 rvol = MarketScanner.calculate_rvol(sym_hist, period=20)
@@ -532,12 +609,10 @@ class BacktestEngine:
                 if approved or self.cfg.lock_triggered_on_reject:
                     triggered_today.add(sym)
 
-        # Drain any remaining execution bars up through session close
         _advance_execution_up_to(close_dt_et.astimezone(timezone.utc))
         if not flattened:
             broker.flatten_all(flatten_dt.astimezone(timezone.utc), last_known_price, reason=flatten_reason)
 
-        # Compute post_exit_max_r for today's closed trades (feeds live Breakeven Choke Audit)
         flatten_utc = flatten_dt.astimezone(timezone.utc)
         for tr in broker.today_closed_trades:
             sym = tr["symbol"]
@@ -548,10 +623,7 @@ class BacktestEngine:
                 continue
             exit_dt = datetime.fromisoformat(tr["exit_time"])
             src = bars_1m_today.get(sym) or bars_5m_today.get(sym, [])
-            after = [
-                b for b in src
-                if exit_dt < b.timestamp.astimezone(timezone.utc) <= flatten_utc
-            ]
+            after = [b for b in src if exit_dt < b.timestamp.astimezone(timezone.utc) <= flatten_utc]
             if after:
                 post_hi = max(b.high for b in after)
                 tr["post_exit_max_r"] = round((post_hi - entry_p) / risk_1r, 3)

@@ -67,6 +67,10 @@ class BacktestRunRequest(BaseModel):
     use_1m_execution: bool = True
     enable_edgar_fundamentals: bool = False
     screener_min_fundamental_rating: float = Field(default=5.0, ge=0.0, le=10.0)
+    custom_entry_cutoff_et: Optional[str] = None
+    midday_blackout_start_et: Optional[str] = None
+    midday_blackout_end_et: Optional[str] = None
+    require_spy_above_daily_ema20: bool = False
     run_gemini_review: bool = False
 
 
@@ -202,6 +206,10 @@ async def start_backtest_run(
         use_1m_execution=payload.use_1m_execution,
         enable_edgar_fundamentals=payload.enable_edgar_fundamentals,
         screener_min_fundamental_rating=payload.screener_min_fundamental_rating,
+        custom_entry_cutoff_et=(payload.custom_entry_cutoff_et or "").strip() or None,
+        midday_blackout_start_et=(payload.midday_blackout_start_et or "").strip() or None,
+        midday_blackout_end_et=(payload.midday_blackout_end_et or "").strip() or None,
+        require_spy_above_daily_ema20=payload.require_spy_above_daily_ema20,
         run_gemini_review=payload.run_gemini_review,
     )
 

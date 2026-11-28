@@ -116,6 +116,14 @@ class BacktestConfig:
     fomc_entry_cutoff_time: str = field(default_factory=lambda: str(settings.FOMC_ENTRY_CUTOFF_TIME))
     fomc_flatten_time: str = field(default_factory=lambda: str(settings.FOMC_PRE_EVENT_FLATTEN_TIME))
 
+    # Optional Experiment / Optimization Filters (all OFF by default for 1:1 live baseline parity)
+    custom_entry_cutoff_et: Optional[str] = None  # e.g. "11:30" or "12:00" for morning-only tests
+    midday_blackout_start_et: Optional[str] = None  # e.g. "12:00"
+    midday_blackout_end_et: Optional[str] = None  # e.g. "14:00"
+    require_spy_above_daily_ema20: bool = False  # Higher-timeframe SPY daily trend filter (T-1 close > EMA20)
+    stop_atr_multiplier: float = 1.5  # Live default = 1.5x 5m ATR; test 2.5-4.0x to avoid micro-noise stops
+    use_pure_or_low_stop: bool = False  # Test structural OR_Low stop instead of max(OR_Low, close - k*ATR)
+
     # Realistic Friction Modeling
     exit_slippage_bps: float = 3.0  # 3 bps (0.03%) conservative slippage on stop-outs & EOD market flattens
     commission_per_share: float = 0.0  # Alpaca equities are $0 commission

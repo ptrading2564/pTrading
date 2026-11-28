@@ -231,11 +231,15 @@ class SimulatedPortfolioBroker:
             if total_positions >= self.cfg.max_concurrent_positions:
                 return self._reject("Max concurrent positions cap")
 
-        # 5. Entry, Stop-Loss, and Sizing Math (exact RiskManager formulas)
+        # 5. Entry, Stop-Loss, and Sizing Math (exact RiskManager formulas by default)
         entry_limit_price = round(close_price * (1.0 + self.cfg.entry_limit_buffer_pct / 100.0), 2)
-        atr_stop = round(close_price - 1.5 * atr, 2)
-        stop_loss_price = round(max(or_low, atr_stop), 2)
-        stop_type = "OR_LOW" if or_low >= atr_stop else "ATR_1_5"
+        if self.cfg.use_pure_or_low_stop:
+            stop_loss_price = round(or_low, 2)
+            stop_type = "OR_LOW"
+        else:
+            atr_stop = round(close_price - self.cfg.stop_atr_multiplier * atr, 2)
+            stop_loss_price = round(max(or_low, atr_stop), 2)
+            stop_type = "OR_LOW" if or_low >= atr_stop else f"ATR_{str(self.cfg.stop_atr_multiplier).replace('.', '_')}"
         stop_distance = round(entry_limit_price - stop_loss_price, 2)
 
         if stop_distance < self.cfg.min_stop_distance_dollars:

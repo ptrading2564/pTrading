@@ -44,6 +44,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-spy-qqq-gate", action="store_true")
     p.add_argument("--unlock-on-reject", action="store_true")
     p.add_argument("--edgar-fundamentals", action="store_true")
+    p.add_argument("--entry-cutoff", default="", help="Optional custom ET entry cutoff, e.g. 11:30 or 12:00")
+    p.add_argument("--midday-blackout", default="", help="Optional lunch blackout window, e.g. 12:00-14:00")
+    p.add_argument("--spy-ema20", action="store_true", help="Require SPY prior-day close >= daily EMA20")
     p.add_argument("--no-1m", action="store_true", help="Use 5m bars only for faster sweeps")
     p.add_argument("--no-persist", action="store_true", help="Do not save run to data/backtest.db")
     p.add_argument("--sweep-be", default="", help="Optional comma-separated breakeven_trigger_r sweep values")
@@ -87,6 +90,10 @@ async def _run_async(args: argparse.Namespace) -> int:
             enable_spy_qqq_gate=not args.no_spy_qqq_gate,
             lock_triggered_on_reject=not args.unlock_on_reject,
             enable_edgar_fundamentals=args.edgar_fundamentals,
+            custom_entry_cutoff_et=args.entry_cutoff.strip() or None,
+            midday_blackout_start_et=(args.midday_blackout.split("-")[0].strip() if "-" in args.midday_blackout else None),
+            midday_blackout_end_et=(args.midday_blackout.split("-")[1].strip() if "-" in args.midday_blackout else None),
+            require_spy_above_daily_ema20=args.spy_ema20,
             use_1m_execution=not args.no_1m,
         )
 

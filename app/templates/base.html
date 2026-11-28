@@ -39,9 +39,9 @@
         </div>
       </div>
 
-      <div class="flex items-center gap-4">
+      <div class="flex items-center gap-2 lg:gap-4 min-w-0">
         <!-- Market Status Badge -->
-        <div id="market-status-badge" class="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs whitespace-nowrap">
+        <div id="market-status-badge" class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-[11px] whitespace-nowrap">
           <span id="header-market-dot" class="w-2 h-2 rounded-full {% if is_market_open %}bg-emerald-400 animate-pulse{% else %}bg-slate-500{% endif %}"></span>
           <span id="header-market-text" class="text-slate-300 font-medium">{% if is_market_open %}MARKET OPEN{% else %}MARKET CLOSED{% endif %}</span>
           <span class="text-slate-500">|</span>
@@ -49,13 +49,13 @@
         </div>
 
         {% set cur_path = request.url.path if request else '/' %}
-        <nav class="flex items-center gap-1.5 text-sm">
-          <a href="/" class="px-3 py-1.5 rounded-md hover:bg-slate-700 transition font-medium {% if cur_path == '/' %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Dashboard</a>
-          <a href="/analytics" class="px-3 py-1.5 rounded-md hover:bg-slate-700 transition font-medium {% if cur_path.startswith('/analytics') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Analytics</a>
-          <a href="/backtest" class="px-3 py-1.5 rounded-md hover:bg-slate-700 transition font-medium {% if cur_path.startswith('/backtest') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Backtest</a>
-          <a href="/calendar" class="px-3 py-1.5 rounded-md hover:bg-slate-700 transition font-medium {% if cur_path.startswith('/calendar') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Calendar</a>
-          <a href="/financing" class="px-3 py-1.5 rounded-md hover:bg-slate-700 transition font-medium {% if cur_path.startswith('/financing') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Financing</a>
-          <a href="/health" target="_blank" class="px-3 py-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition font-medium">Health</a>
+        <nav class="flex items-center gap-0.5 lg:gap-1 text-xs lg:text-sm overflow-x-auto">
+          <a href="/" class="px-2 lg:px-2.5 py-1.5 rounded-md hover:bg-slate-700 transition font-medium whitespace-nowrap {% if cur_path == '/' %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Dashboard</a>
+          <a href="/analytics" class="px-2 lg:px-2.5 py-1.5 rounded-md hover:bg-slate-700 transition font-medium whitespace-nowrap {% if cur_path.startswith('/analytics') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Analytics</a>
+          <a href="/backtest" class="px-2 lg:px-2.5 py-1.5 rounded-md hover:bg-slate-700 transition font-medium whitespace-nowrap {% if cur_path.startswith('/backtest') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Backtest</a>
+          <a href="/calendar" class="px-2 lg:px-2.5 py-1.5 rounded-md hover:bg-slate-700 transition font-medium whitespace-nowrap {% if cur_path.startswith('/calendar') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Calendar</a>
+          <a href="/financing" class="px-2 lg:px-2.5 py-1.5 rounded-md hover:bg-slate-700 transition font-medium whitespace-nowrap {% if cur_path.startswith('/financing') %}bg-slate-700/70 text-white{% else %}text-slate-400 hover:text-slate-200{% endif %}">Financing</a>
+          <a href="/health" target="_blank" class="px-2 lg:px-2.5 py-1.5 rounded-md hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition font-medium whitespace-nowrap">Health</a>
         </nav>
 
         <!-- User Avatar & Profile Dropdown Menu -->

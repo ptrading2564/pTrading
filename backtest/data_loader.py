@@ -170,15 +170,18 @@ class AlpacaCachedDataStore(HistoricalDataStore):
             )
             conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS coverage (
+                CREATE TABLE IF NOT EXISTS coverage_intervals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     symbol TEXT NOT NULL,
                     timeframe TEXT NOT NULL,
                     feed TEXT NOT NULL,
                     start_date TEXT NOT NULL,
-                    end_date TEXT NOT NULL,
-                    PRIMARY KEY (symbol, timeframe, feed)
+                    end_date TEXT NOT NULL
                 );
                 """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cov_sym_tf_feed ON coverage_intervals(symbol, timeframe, feed);"
             )
             conn.execute(
                 """
@@ -343,19 +346,23 @@ class AlpacaCachedDataStore(HistoricalDataStore):
         req_start_d = start_utc.astimezone(self.tz).strftime("%Y-%m-%d")
         req_end_d = end_utc.astimezone(self.tz).strftime("%Y-%m-%d")
 
-        # Determine which symbols need fetching (missing or partial date coverage)
+        # Determine which symbols need fetching using gap-safe contiguous interval coverage
+        cov_map: Dict[str, List[Tuple[str, str]]] = {}
         with self._connect() as conn:
-            placeholders = ",".join("?" for _ in symbols)
-            cov_rows = conn.execute(
-                f"SELECT symbol, start_date, end_date FROM coverage WHERE timeframe = ? AND feed = ? AND symbol IN ({placeholders});",
-                [timeframe, feed, *symbols],
-            ).fetchall()
-        cov_map: Dict[str, Tuple[str, str]] = {r[0]: (r[1], r[2]) for r in cov_rows}
+            chunk_size = 400
+            for i in range(0, len(symbols), chunk_size):
+                chunk = symbols[i : i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                cov_rows = conn.execute(
+                    f"SELECT symbol, start_date, end_date FROM coverage_intervals WHERE timeframe = ? AND feed = ? AND symbol IN ({placeholders});",
+                    [timeframe, feed, *chunk],
+                ).fetchall()
+                for sym_r, s_d, e_d in cov_rows:
+                    cov_map.setdefault(sym_r, []).append((s_d, e_d))
 
         symbols_to_fetch: List[str] = []
         for sym in symbols:
-            cov = cov_map.get(sym)
-            if cov is None or req_start_d < cov[0] or req_end_d > cov[1]:
+            if not self._is_range_covered(cov_map.get(sym, []), req_start_d, req_end_d):
                 symbols_to_fetch.append(sym)
 
         if symbols_to_fetch:
@@ -404,6 +411,31 @@ class AlpacaCachedDataStore(HistoricalDataStore):
                     )
         return result
 
+    @staticmethod
+    def _merge_contiguous_intervals(intervals: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+        """Merges ONLY overlapping or adjacent (<=1 calendar day gap) date intervals; never bridges gaps."""
+        if not intervals:
+            return []
+        ordered = sorted(intervals, key=lambda x: (x[0], x[1]))
+        merged: List[Tuple[str, str]] = [ordered[0]]
+        for s_str, e_str in ordered[1:]:
+            prev_s, prev_e = merged[-1]
+            prev_e_d = date.fromisoformat(prev_e)
+            cur_s_d = date.fromisoformat(s_str)
+            if cur_s_d <= prev_e_d + timedelta(days=1):
+                merged[-1] = (prev_s, max(prev_e, e_str))
+            else:
+                merged.append((s_str, e_str))
+        return merged
+
+    @classmethod
+    def _is_range_covered(cls, intervals: List[Tuple[str, str]], req_start: str, req_end: str) -> bool:
+        """Returns True iff merged contiguous intervals completely cover [req_start, req_end]."""
+        for s_str, e_str in cls._merge_contiguous_intervals(intervals):
+            if s_str <= req_start and e_str >= req_end:
+                return True
+        return False
+
     def _fetch_and_cache_batches(
         self,
         symbols: List[str],
@@ -412,7 +444,7 @@ class AlpacaCachedDataStore(HistoricalDataStore):
         end_utc: datetime,
         req_start_d: str,
         req_end_d: str,
-        cov_map: Dict[str, Tuple[str, str]],
+        cov_map: Dict[str, List[Tuple[str, str]]],
         feed: str,
         progress_cb: ProgressCallback,
     ) -> None:
@@ -492,14 +524,7 @@ class AlpacaCachedDataStore(HistoricalDataStore):
                             )
                         )
 
-            # Persist batch bars + updated coverage atomically
-            cov_updates: List[Tuple[str, str, str, str, str]] = []
-            for sym in batch:
-                old = cov_map.get(sym)
-                new_s = min(req_start_d, old[0]) if old else req_start_d
-                new_e = max(req_end_d, old[1]) if old else req_end_d
-                cov_updates.append((sym, timeframe, feed, new_s, new_e))
-
+            # Persist batch bars + gap-safe merged coverage intervals atomically
             with self._connect() as conn:
                 if rows_to_insert:
                     conn.executemany(
@@ -510,13 +535,22 @@ class AlpacaCachedDataStore(HistoricalDataStore):
                         """,
                         rows_to_insert,
                     )
-                conn.executemany(
-                    """
-                    INSERT OR REPLACE INTO coverage (symbol, timeframe, feed, start_date, end_date)
-                    VALUES (?, ?, ?, ?, ?);
-                    """,
-                    cov_updates,
-                )
+                for sym in batch:
+                    existing = list(cov_map.get(sym, []))
+                    existing.append((req_start_d, req_end_d))
+                    merged = self._merge_contiguous_intervals(existing)
+                    cov_map[sym] = merged
+                    conn.execute(
+                        "DELETE FROM coverage_intervals WHERE symbol = ? AND timeframe = ? AND feed = ?;",
+                        (sym, timeframe, feed),
+                    )
+                    conn.executemany(
+                        """
+                        INSERT INTO coverage_intervals (symbol, timeframe, feed, start_date, end_date)
+                        VALUES (?, ?, ?, ?, ?);
+                        """,
+                        [(sym, timeframe, feed, s_i, e_i) for s_i, e_i in merged],
+                    )
                 conn.commit()
 
     def _request_with_retry(self, client, req, max_retries: int = 4):

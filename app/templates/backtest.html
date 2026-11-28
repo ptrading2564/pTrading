@@ -7,8 +7,8 @@
   <!-- Header & System Readiness Strip -->
   <div class="border-b border-slate-700/60 pb-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
     <div>
-      <div class="flex items-center gap-2.5">
-        <h1 class="text-xl font-bold text-white">Automated Portfolio Backtest Lab</h1>
+      <div class="flex flex-wrap items-center gap-2.5">
+        <h1 class="text-xl font-bold text-white">Automated Portfolio Backtest &amp; Diagnostics Lab</h1>
         <span class="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-semibold">
           Isolated DB &bull; Zero Live Impact
         </span>
@@ -25,7 +25,7 @@
         Dedicated Backtest Keys Ready
       </span>
       {% elif cred_source == 'LIVE_ALPACA_KEY_FALLBACK' %}
-      <span class="px-2.5 py-1 rounded-lg bg-sky-500/15 text-sky-300 border border-sky-500/30 font-medium" title="Using read-only live Alpaca data keys; add BACKTEST_ALPACA_API_KEY to .env for an independent 200 req/min quota.">
+      <span class="px-2.5 py-1 rounded-lg bg-sky-500/15 text-sky-300 border border-sky-500/30 font-medium">
         Alpaca Data Ready (Read-Only Fallback)
       </span>
       {% else %}
@@ -43,9 +43,9 @@
 
   <!-- Run Builder Card -->
   <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl shadow overflow-hidden">
-    <div class="px-5 py-3.5 border-b border-slate-700/60 flex items-center justify-between bg-slate-800/60">
+    <div class="px-5 py-3 border-b border-slate-700/60 flex flex-wrap items-center justify-between gap-2 bg-slate-800/60">
       <h2 class="text-sm font-bold uppercase tracking-wider text-white">Launch New Backtest Run</h2>
-      <span class="text-[11px] text-slate-400">SIP historical data is free on Alpaca Basic (&gt;15m delayed) and cached locally after first run</span>
+      <span class="text-[11px] text-slate-400">Month-scoped smart caching: first fetch caches locally; re-runs execute offline in seconds</span>
     </div>
 
     <form id="backtest-form" onsubmit="launchBacktest(event)" class="p-5 space-y-4">
@@ -80,11 +80,11 @@
 
         <div>
           <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Run Label (Optional)</label>
-          <input type="text" id="bt_name" name="name" placeholder="e.g. Mode A SIP Baseline" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500">
+          <input type="text" id="bt_name" name="name" placeholder="e.g. Mode A 2024-25 SIP" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500">
         </div>
       </div>
 
-      <!-- Mode B Custom Symbols (Hidden unless Mode B selected) -->
+      <!-- Mode B Custom Symbols -->
       <div id="custom-symbols-row" class="hidden">
         <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">
           Custom Symbols (Comma-separated; leave blank to use live DEFAULT_BASKET 38 tickers)
@@ -94,47 +94,55 @@
       </div>
 
       <!-- Strategy Parameters Row -->
-      <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+      <div class="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2.5">
         <div>
-          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Start Capital ($)</label>
-          <input type="number" id="bt_capital" name="initial_capital" value="50000" step="1000" min="1000" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Capital ($)</label>
+          <input type="number" id="bt_capital" value="50000" step="1000" min="1000" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono">
         </div>
         <div>
           <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Risk Profile</label>
-          <select id="bt_risk_profile" name="risk_profile" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+          <select id="bt_risk_profile" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white">
             <option value="P1_DEFENSIVE">P1 (0.25%)</option>
             <option value="P2_BALANCED" selected>P2 (0.50%)</option>
             <option value="P3_GROWTH">P3 (1.00%)</option>
-            <option value="CUSTOM">Custom %</option>
+            <option value="CUSTOM">Custom</option>
           </select>
         </div>
         <div>
-          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Custom Risk %</label>
-          <input type="number" id="bt_risk_pct" name="risk_percent_per_trade" value="{{ defaults.risk_pct }}" step="0.05" min="0.1" max="3.0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Risk %</label>
+          <input type="number" id="bt_risk_pct" value="{{ defaults.risk_pct }}" step="0.05" min="0.1" max="3.0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono">
         </div>
         <div>
-          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Max Basket (0=All)</label>
-          <input type="number" id="bt_basket_size" name="max_basket_size" value="38" min="0" max="300" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Basket Cap</label>
+          <input type="number" id="bt_basket_size" value="38" min="0" max="300" title="0 = uncapped" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono">
         </div>
         <div>
           <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Min RVOL</label>
-          <input type="number" id="bt_rvol" name="scanner_min_rvol" value="{{ defaults.min_rvol }}" step="0.1" min="0.5" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+          <input type="number" id="bt_rvol" value="{{ defaults.min_rvol }}" step="0.1" min="0.5" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono">
         </div>
         <div>
           <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Max ATR Ext</label>
-          <input type="number" id="bt_atr_ext" name="scanner_max_atr_extension" value="{{ defaults.max_atr_ext }}" step="0.05" min="0.1" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+          <input type="number" id="bt_atr_ext" value="{{ defaults.max_atr_ext }}" step="0.05" min="0.1" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono">
         </div>
         <div>
-          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">BE Trigger (R)</label>
-          <input type="number" id="bt_be_r" name="breakeven_trigger_r" value="{{ defaults.be_trigger_r }}" step="0.25" min="0.25" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">BE Trigger</label>
+          <input type="number" id="bt_be_r" value="{{ defaults.be_trigger_r }}" step="0.25" min="0.25" max="5.0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono">
         </div>
         <div>
-          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Exit Slip (bps)</label>
-          <input type="number" id="bt_slip" name="exit_slippage_bps" value="3.0" step="0.5" min="0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">TP Target (R)</label>
+          <input type="number" id="bt_tp_r" value="2.0" step="0.25" min="0.5" max="6.0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Entry Cutoff</label>
+          <input type="text" id="bt_entry_cutoff" placeholder="15:00" title="Optional custom ET entry cutoff e.g. 11:30 or 12:00" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono placeholder-slate-500">
+        </div>
+        <div>
+          <label class="block text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Slip (bps)</label>
+          <input type="number" id="bt_slip" value="3.0" step="0.5" min="0" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white font-mono">
         </div>
       </div>
 
-      <!-- Live Guard Toggles -->
+      <!-- Live Guard & Experiment Toggles -->
       <div class="flex flex-wrap items-center gap-x-5 gap-y-2 pt-1 text-xs text-slate-300">
         <label class="inline-flex items-center gap-1.5 cursor-pointer">
           <input type="checkbox" id="bt_slot_recycle" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
@@ -154,19 +162,27 @@
         </label>
         <label class="inline-flex items-center gap-1.5 cursor-pointer">
           <input type="checkbox" id="bt_spy_gate" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
-          <span>SPY &amp; QQQ &gt; VWAP Gate</span>
+          <span>SPY &amp; QQQ &gt; VWAP</span>
         </label>
         <label class="inline-flex items-center gap-1.5 cursor-pointer">
           <input type="checkbox" id="bt_lock_reject" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
-          <span>Lock Symbol on Reject (Live Parity)</span>
+          <span>Lock Symbol on Reject</span>
         </label>
         <label class="inline-flex items-center gap-1.5 cursor-pointer">
           <input type="checkbox" id="bt_1m" checked class="rounded bg-slate-900 border-slate-600 text-sky-500">
           <span>1m Intrabar Execution</span>
         </label>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Experiment: Skip entries when SPY prior-day close is below its 20-day EMA">
+          <input type="checkbox" id="bt_spy_ema20" class="rounded bg-slate-900 border-slate-600 text-amber-500">
+          <span class="text-amber-300">Exp: SPY &ge; Daily EMA20</span>
+        </label>
+        <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Experiment: Block new entries during 12:00-14:00 ET midday lunch chop">
+          <input type="checkbox" id="bt_lunch_blackout" class="rounded bg-slate-900 border-slate-600 text-amber-500">
+          <span class="text-amber-300">Exp: Lunch Blackout (12-14 ET)</span>
+        </label>
         <label class="inline-flex items-center gap-1.5 cursor-pointer" title="Optional: Query free SEC EDGAR XBRL filings (point-in-time) to enforce Fundamental Rating >= 5 in Mode A.">
           <input type="checkbox" id="bt_edgar" class="rounded bg-slate-900 border-slate-600 text-indigo-500">
-          <span class="text-indigo-300">SEC EDGAR Fundamental Gate (&ge;5)</span>
+          <span class="text-indigo-300">Exp: SEC EDGAR Fund (&ge;5)</span>
         </label>
         {% if defaults.gemini_configured %}
         <label class="inline-flex items-center gap-1.5 cursor-pointer">
@@ -201,7 +217,7 @@
     </form>
   </div>
 
-  <!-- Side-by-Side Run Comparison Banner (Shown when compare_run is active) -->
+  <!-- Side-by-Side Run Comparison Banner -->
   {% if selected_run and compare_run and selected_run.summary and compare_run.summary %}
   {% set sa = selected_run.summary %}
   {% set sb = compare_run.summary %}
@@ -263,6 +279,10 @@
   {% set rep = selected_run.report %}
   {% set cum = rep.cumulative_trades_metrics %}
   {% set funnel = rep.signal_funnel %}
+  {% set deep = rep.deep_diagnostics or {} %}
+  {% set ror_a = rep.risk_of_ruin.analytical if rep.risk_of_ruin else {} %}
+  {% set ror_mc = rep.risk_of_ruin.monte_carlo if rep.risk_of_ruin else {} %}
+  {% set proj = rep.projections or {} %}
 
   <div class="space-y-5">
     <!-- Run Title & Export Actions -->
@@ -272,7 +292,11 @@
           <h2 class="text-lg font-bold text-white">{{ selected_run.name }}</h2>
           <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">{{ selected_run.mode }}</span>
           <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">{{ selected_run.feed }}</span>
-          <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+          <span class="text-[10px] font-mono px-2 py-0.5 rounded font-bold border
+            {% if s.health_score >= 75 %}bg-emerald-500/15 text-emerald-300 border-emerald-500/30
+            {% elif s.health_score >= 55 %}bg-sky-500/15 text-sky-300 border-sky-500/30
+            {% elif s.health_score >= 40 %}bg-amber-500/15 text-amber-300 border-amber-500/40
+            {% else %}bg-rose-500/15 text-rose-300 border-rose-500/40{% endif %}">
             Health {{ s.health_score }}/100 ({{ s.health_grade }})
           </span>
         </div>
@@ -335,77 +359,227 @@
       </div>
     </div>
 
-    <!-- Interactive Equity Curve vs SPY & Underwater Drawdown -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <div class="lg:col-span-2 bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
-        <div class="flex items-center justify-between mb-2">
-          <h3 class="text-xs font-bold uppercase tracking-wider text-white">Equity Curve vs. SPY Buy-and-Hold</h3>
-          <div class="flex items-center gap-3 text-[11px] font-mono">
-            <span class="text-sky-400">&mdash; pTrading Equity</span>
-            <span class="text-slate-400">&mdash; SPY Benchmark</span>
+    <!-- Deep-Dive Diagnostic Sub-Tabs -->
+    <div class="border-b border-slate-700/80 flex flex-wrap gap-1.5">
+      <button type="button" onclick="switchBtTab('overview')" id="tab-btn-overview" class="bt-tab-btn px-4 py-2 text-xs font-bold rounded-t-lg border-b-2 border-sky-400 text-white bg-slate-800/80">
+        Overview &amp; Curves
+      </button>
+      <button type="button" onclick="switchBtTab('diagnostics')" id="tab-btn-diagnostics" class="bt-tab-btn px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+        Failure Diagnostics &amp; Attribution
+      </button>
+      <button type="button" onclick="switchBtTab('review')" id="tab-btn-review" class="bt-tab-btn px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+        Strategy Review &amp; RoR
+      </button>
+      <button type="button" onclick="switchBtTab('trades')" id="tab-btn-trades" class="bt-tab-btn px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 border-transparent text-slate-400 hover:text-slate-200">
+        Trade Log ({{ selected_run.trades | length }})
+      </button>
+    </div>
+
+    <!-- TAB 1: OVERVIEW & CURVES -->
+    <div id="tab-panel-overview" class="bt-tab-panel space-y-4">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="lg:col-span-2 space-y-4">
+          <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="text-xs font-bold uppercase tracking-wider text-white">Equity Curve vs. SPY Buy-and-Hold</h3>
+              <div class="flex items-center gap-3 text-[11px] font-mono">
+                <span class="text-sky-400">&mdash; pTrading Equity</span>
+                <span class="text-slate-400">&mdash; SPY Benchmark</span>
+              </div>
+            </div>
+            <div id="bt-equity-chart" class="w-full h-64"></div>
+          </div>
+
+          <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-2">
+              <h3 class="text-xs font-bold uppercase tracking-wider text-white">Underwater Drawdown (%)</h3>
+              <span class="text-[11px] font-mono text-rose-400">Peak-to-Trough Max: -{{ "%.2f"|format(s.max_drawdown_pct) }}%</span>
+            </div>
+            <div id="bt-dd-chart" class="w-full h-40"></div>
           </div>
         </div>
-        <div id="bt-equity-chart" class="w-full h-72"></div>
-      </div>
 
-      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-3">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-white">Exit Breakdown &amp; Signal Funnel</h3>
-        <div class="space-y-1.5 text-xs font-mono">
-          <div class="flex justify-between"><span class="text-slate-400">Total Signals Detected</span><span class="text-white">{{ funnel.total_signals }}</span></div>
-          <div class="flex justify-between"><span class="text-slate-400">Approved &rarr; Queued</span><span class="text-emerald-400">{{ funnel.approved_signals }}</span></div>
-          <div class="flex justify-between"><span class="text-slate-400">Rejected by Risk/Caps</span><span class="text-amber-300">{{ funnel.rejected_signals }}</span></div>
-          <div class="flex justify-between"><span class="text-slate-400">Stale Limit Expired (3m)</span><span class="text-slate-300">{{ funnel.expired_stale_orders }}</span></div>
-          <div class="flex justify-between"><span class="text-slate-400">Circuit Breaker Days</span><span class="text-rose-400">{{ funnel.circuit_breaker_days }}</span></div>
-          <div class="flex justify-between"><span class="text-slate-400">FOMC Pre-Event Flattens</span><span class="text-indigo-300">{{ funnel.fomc_flattened_positions or 0 }}</span></div>
-        </div>
+        <div class="space-y-4">
+          <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-3">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-white">Signal Funnel &amp; Regime Split</h3>
+            <div class="space-y-1.5 text-xs font-mono">
+              <div class="flex justify-between"><span class="text-slate-400">Total Signals</span><span class="text-white">{{ funnel.total_signals }}</span></div>
+              <div class="flex justify-between"><span class="text-slate-400">Approved &rarr; Queued</span><span class="text-emerald-400">{{ funnel.approved_signals }}</span></div>
+              <div class="flex justify-between"><span class="text-slate-400">Rejected (Risk/Caps)</span><span class="text-amber-300">{{ funnel.rejected_signals }}</span></div>
+              <div class="flex justify-between"><span class="text-slate-400">Stale Expired (3m)</span><span class="text-slate-300">{{ funnel.expired_stale_orders }}</span></div>
+              <div class="flex justify-between"><span class="text-slate-400">Circuit Breaker Days</span><span class="text-rose-400">{{ funnel.circuit_breaker_days }}</span></div>
+              <div class="flex justify-between"><span class="text-slate-400">FOMC Pre-Event Flattens</span><span class="text-indigo-300">{{ funnel.fomc_flattened_positions or 0 }}</span></div>
+            </div>
 
-        <div class="border-t border-slate-700/60 pt-2.5 space-y-1 text-xs font-mono">
-          <div class="text-[10px] uppercase text-slate-400 font-sans font-semibold mb-1">Trade Outcomes</div>
-          <div class="flex justify-between"><span class="text-emerald-400">Wins / Losses / BE</span><span>{{ cum.wins }}W / {{ cum.losses }}L / {{ cum.breakevens }}BE</span></div>
-          {% if cum.breakeven_audit %}
-          <div class="flex justify-between"><span class="text-slate-400">BE Choked Winners</span><span class="text-amber-300">{{ cum.breakeven_audit.choked_winners_count }}/{{ cum.breakeven_audit.stopped_at_be }} ({{ "%.0f"|format(cum.breakeven_audit.choked_winners_pct) }}%)</span></div>
-          {% endif %}
-          {% if cum.mfe_mae and cum.mfe_mae.avg_mfe_r is not none %}
-          <div class="flex justify-between"><span class="text-slate-400">Avg MFE / MAE</span><span>+{{ "%.2f"|format(cum.mfe_mae.avg_mfe_r) }}R / -{{ "%.2f"|format(cum.mfe_mae.avg_mae_r) }}R</span></div>
-          {% endif %}
-        </div>
+            <div class="border-t border-slate-700/60 pt-2.5 space-y-1 text-xs font-mono">
+              <div class="text-[10px] uppercase text-slate-400 font-sans font-semibold mb-1">Trade Outcomes</div>
+              <div class="flex justify-between"><span class="text-emerald-400">Wins / Losses / BE</span><span>{{ cum.wins }}W / {{ cum.losses }}L / {{ cum.breakevens }}BE</span></div>
+              {% if cum.breakeven_audit %}
+              <div class="flex justify-between"><span class="text-slate-400">BE Choked Winners</span><span class="text-amber-300">{{ cum.breakeven_audit.choked_winners_count }}/{{ cum.breakeven_audit.stopped_at_be }} ({{ "%.0f"|format(cum.breakeven_audit.choked_winners_pct) }}%)</span></div>
+              {% endif %}
+              {% if cum.mfe_mae and cum.mfe_mae.avg_mfe_r is not none %}
+              <div class="flex justify-between"><span class="text-slate-400">Avg MFE / MAE</span><span>+{{ "%.2f"|format(cum.mfe_mae.avg_mfe_r) }}R / -{{ "%.2f"|format(cum.mfe_mae.avg_mae_r) }}R</span></div>
+              {% endif %}
+            </div>
 
-        {% if rep.regime_breakdown %}
-        <div class="border-t border-slate-700/60 pt-2.5 space-y-1 text-xs font-mono">
-          <div class="text-[10px] uppercase text-slate-400 font-sans font-semibold mb-1">Market Regime Split</div>
-          {% for reg, st in rep.regime_breakdown.items() %}
-          <div class="flex justify-between">
-            <span class="text-slate-300">{{ reg }} ({{ st.days }}d)</span>
-            <span class="{% if st.total_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.1f"|format(st.total_r) }}R ({{ st.trades }}t)</span>
+            {% if rep.regime_breakdown %}
+            <div class="border-t border-slate-700/60 pt-2.5 space-y-1 text-xs font-mono">
+              <div class="text-[10px] uppercase text-slate-400 font-sans font-semibold mb-1">Market Regime Split</div>
+              {% for reg, st in rep.regime_breakdown.items() %}
+              <div class="flex justify-between">
+                <span class="text-slate-300">{{ reg }} ({{ st.days }}d)</span>
+                <span class="{% if st.total_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.1f"|format(st.total_r) }}R ({{ st.trades }}t, {{ "%.0f"|format(st.win_rate_pct) }}% WR)</span>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
           </div>
-          {% endfor %}
+
+          <!-- Monthly Returns Card -->
+          <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-white mb-2">Monthly Compounded Returns</h3>
+            <div class="max-h-56 overflow-y-auto">
+              <table class="w-full text-xs font-mono">
+                <thead class="text-[10px] uppercase text-slate-400 border-b border-slate-700 sticky top-0 bg-slate-800">
+                  <tr>
+                    <th class="text-left py-1">Month</th>
+                    <th class="text-right py-1">Trades</th>
+                    <th class="text-right py-1">P&amp;L</th>
+                    <th class="text-right py-1">ROI</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-700/40">
+                  {% for m in rep.monthly_returns %}
+                  <tr>
+                    <td class="py-1 text-slate-300">{{ m.month }}</td>
+                    <td class="py-1 text-right text-slate-400">{{ m.trades }}</td>
+                    <td class="py-1 text-right {% if m.pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.0f"|format(m.pnl) | replace("+", "+$") | replace("-", "-$") }}</td>
+                    <td class="py-1 text-right font-semibold {% if m.roi_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(m.roi_pct) }}%</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-        {% endif %}
       </div>
     </div>
 
-    <!-- Monthly Returns & AI Strategy Review -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <!-- Monthly Returns Table -->
-      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-white mb-3">Monthly Compounded Returns</h3>
-        <div class="max-h-72 overflow-y-auto">
+    <!-- TAB 2: FAILURE DIAGNOSTICS & ATTRIBUTION -->
+    <div id="tab-panel-diagnostics" class="bt-tab-panel hidden space-y-4">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- Time-of-Day Attribution -->
+        <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-white mb-3">Time-of-Day Entry Attribution (ET)</h3>
           <table class="w-full text-xs font-mono">
             <thead class="text-[10px] uppercase text-slate-400 border-b border-slate-700">
               <tr>
-                <th class="text-left py-1.5">Month</th>
+                <th class="text-left py-1.5">Window (ET)</th>
                 <th class="text-right py-1.5">Trades</th>
-                <th class="text-right py-1.5">P&amp;L</th>
-                <th class="text-right py-1.5">ROI</th>
+                <th class="text-right py-1.5">Win Rate</th>
+                <th class="text-right py-1.5">Avg R</th>
+                <th class="text-right py-1.5">Total R</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-slate-700/40">
-              {% for m in rep.monthly_returns %}
+              {% for bucket, st in (cum.time_of_day_buckets or {}).items() %}
               <tr>
-                <td class="py-1.5 text-slate-300">{{ m.month }}</td>
-                <td class="py-1.5 text-right text-slate-400">{{ m.trades }}</td>
-                <td class="py-1.5 text-right {% if m.pnl >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.0f"|format(m.pnl) | replace("+", "+$") | replace("-", "-$") }}</td>
-                <td class="py-1.5 text-right font-semibold {% if m.roi_pct >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(m.roi_pct) }}%</td>
+                <td class="py-2 text-slate-200 font-semibold">{{ bucket }}</td>
+                <td class="py-2 text-right text-slate-400">{{ st.trades }}</td>
+                <td class="py-2 text-right text-slate-300">{{ "%.1f"|format(st.win_rate_pct) }}%</td>
+                <td class="py-2 text-right {% if st.avg_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.3f"|format(st.avg_r) }}R</td>
+                <td class="py-2 text-right font-bold {% if st.total_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(st.total_r) }}R</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Stop-Type & Exit-Reason Attribution -->
+        <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-4">
+          <div>
+            <h3 class="text-xs font-bold uppercase tracking-wider text-white mb-2">Stop-Loss Placement Audit (OR_LOW vs ATR_1_5)</h3>
+            <div class="grid grid-cols-2 gap-2 text-xs font-mono">
+              {% for stype, st in (cum.stop_type_buckets or {}).items() %}
+              <div class="p-3 rounded-lg bg-slate-900/70 border border-slate-700/60">
+                <div class="text-[11px] font-bold text-sky-300">{{ stype }}</div>
+                <div class="mt-1 text-sm font-bold {% if st.avg_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.3f"|format(st.avg_r) }}R avg</div>
+                <div class="text-[11px] text-slate-400">{{ st.trades }}t &bull; {{ "%.1f"|format(st.win_rate_pct) }}% WR &bull; Net {{ "%+.1f"|format(st.total_r) }}R</div>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div>
+            <h3 class="text-xs font-bold uppercase tracking-wider text-white mb-2">Exit Reason Breakdown</h3>
+            <table class="w-full text-xs font-mono">
+              <thead class="text-[10px] uppercase text-slate-400 border-b border-slate-700">
+                <tr>
+                  <th class="text-left py-1">Exit Reason</th>
+                  <th class="text-right py-1">Count (%)</th>
+                  <th class="text-right py-1">Avg R</th>
+                  <th class="text-right py-1">Total R</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-700/40">
+                {% for ex in deep.get('exit_reason_breakdown', []) %}
+                <tr>
+                  <td class="py-1.5 text-slate-200">{{ ex.reason }}</td>
+                  <td class="py-1.5 text-right text-slate-400">{{ ex.count }} ({{ "%.1f"|format(ex.pct) }}%)</td>
+                  <td class="py-1.5 text-right {% if ex.avg_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.2f"|format(ex.avg_r) }}R</td>
+                  <td class="py-1.5 text-right font-semibold {% if ex.total_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.1f"|format(ex.total_r) }}R</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- R-Multiple & MFE Peak Histograms + Day of Week -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-2.5">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-white">Realized R-Multiple Distribution</h3>
+          {% for b in deep.get('r_distribution', []) %}
+          <div class="space-y-0.5 text-xs font-mono">
+            <div class="flex justify-between text-[11px]"><span class="text-slate-300">{{ b.label }}</span><span class="text-slate-400">{{ b.count }} ({{ "%.1f"|format(b.pct) }}%)</span></div>
+            <div class="w-full h-2 rounded bg-slate-900 overflow-hidden">
+              <div class="h-full {% if '-' in b.label and 'BE' not in b.label %}bg-rose-500{% elif 'BE' in b.label %}bg-amber-400{% else %}bg-emerald-500{% endif %}" style="width: {{ [b.pct, 100]|min }}%"></div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+
+        <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-2.5">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-white">Peak MFE Distribution (Target Calibration)</h3>
+          {% for b in deep.get('mfe_distribution', []) %}
+          <div class="space-y-0.5 text-xs font-mono">
+            <div class="flex justify-between text-[11px]"><span class="text-slate-300">{{ b.label }}</span><span class="text-slate-400">{{ b.count }} ({{ "%.1f"|format(b.pct) }}%)</span></div>
+            <div class="w-full h-2 rounded bg-slate-900 overflow-hidden">
+              <div class="h-full bg-sky-500" style="width: {{ [b.pct, 100]|min }}%"></div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+
+        <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-white mb-2">Day-of-Week Attribution</h3>
+          <table class="w-full text-xs font-mono">
+            <thead class="text-[10px] uppercase text-slate-400 border-b border-slate-700">
+              <tr>
+                <th class="text-left py-1">Day</th>
+                <th class="text-right py-1">Trades</th>
+                <th class="text-right py-1">WR</th>
+                <th class="text-right py-1">Total R</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/40">
+              {% for d in deep.get('day_of_week', []) %}
+              <tr>
+                <td class="py-1.5 text-slate-200 font-semibold">{{ d.day }}</td>
+                <td class="py-1.5 text-right text-slate-400">{{ d.trades }}</td>
+                <td class="py-1.5 text-right text-slate-300">{{ "%.0f"|format(d.win_rate_pct) }}%</td>
+                <td class="py-1.5 text-right font-semibold {% if d.total_r >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">{{ "%+.1f"|format(d.total_r) }}R</td>
               </tr>
               {% endfor %}
             </tbody>
@@ -413,77 +587,164 @@
         </div>
       </div>
 
-      <!-- Strategy Reviewer Diagnostics -->
-      <div class="lg:col-span-2 bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-3">
-        <div class="flex items-center justify-between">
-          <h3 class="text-xs font-bold uppercase tracking-wider text-white">Automated Strategy Diagnostics &amp; Review</h3>
-          <span class="text-[10px] uppercase px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-semibold">{{ selected_run.review_source }}</span>
+      <!-- Top 10 Winners vs Top 10 Worst Drag Symbols -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-emerald-400 mb-2">Top 10 Contributing Symbols</h3>
+          <table class="w-full text-xs font-mono">
+            <thead class="text-[10px] uppercase text-slate-400 border-b border-slate-700">
+              <tr><th class="text-left py-1">Symbol</th><th class="text-right py-1">Trades</th><th class="text-right py-1">WR</th><th class="text-right py-1">Net R</th><th class="text-right py-1">Net P&amp;L</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/40">
+              {% for row in deep.get('top_winners', []) %}
+              <tr>
+                <td class="py-1.5 font-bold text-white">{{ row.symbol }}</td>
+                <td class="py-1.5 text-right text-slate-400">{{ row.trades }}</td>
+                <td class="py-1.5 text-right text-slate-300">{{ "%.0f"|format(row.win_rate_pct) }}%</td>
+                <td class="py-1.5 text-right text-emerald-400 font-semibold">{{ "%+.2f"|format(row.total_r) }}R</td>
+                <td class="py-1.5 text-right text-emerald-400">+${{ "{:,.0f}".format(row.net_pnl) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
-        <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
-          {% for d in selected_run.diagnostics %}
-          <div class="p-3 rounded-lg bg-slate-900/70 border {% if d.severity == 'ACTION' %}border-rose-500/40{% elif d.severity == 'WATCH' %}border-amber-500/40{% else %}border-slate-700/60{% endif %}">
-            <div class="flex items-center justify-between gap-2">
-              <span class="text-xs font-bold text-white">[{{ d.severity }}] {{ d.title }}</span>
-              <span class="text-[10px] font-mono text-slate-400">n={{ d.sample_size }} &bull; {{ d.config_knob }}</span>
-            </div>
-            <p class="text-xs text-slate-300 mt-1">{{ d.evidence }}</p>
-            <p class="text-[11px] text-sky-300 mt-1">&rarr; {{ d.recommendation }}</p>
-          </div>
-          {% endfor %}
+
+        <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-rose-400 mb-2">Top 10 Drag / Losing Symbols</h3>
+          <table class="w-full text-xs font-mono">
+            <thead class="text-[10px] uppercase text-slate-400 border-b border-slate-700">
+              <tr><th class="text-left py-1">Symbol</th><th class="text-right py-1">Trades</th><th class="text-right py-1">WR</th><th class="text-right py-1">Net R</th><th class="text-right py-1">Net P&amp;L</th></tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/40">
+              {% for row in deep.get('top_losers', []) %}
+              <tr>
+                <td class="py-1.5 font-bold text-white">{{ row.symbol }}</td>
+                <td class="py-1.5 text-right text-slate-400">{{ row.trades }}</td>
+                <td class="py-1.5 text-right text-slate-300">{{ "%.0f"|format(row.win_rate_pct) }}%</td>
+                <td class="py-1.5 text-right text-rose-400 font-semibold">{{ "%+.2f"|format(row.total_r) }}R</td>
+                <td class="py-1.5 text-right text-rose-400">-${{ "{:,.0f}".format(row.net_pnl | abs) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
 
-    <!-- Simulated Trade Log (Clickable for 5m Candlestick Modal) -->
-    <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden">
-      <div class="px-5 py-3 border-b border-slate-700/60 flex items-center justify-between">
-        <h3 class="text-xs font-bold uppercase tracking-wider text-white">Simulated Trade Log ({{ selected_run.trades | length }} trades &mdash; Click any symbol for 5m chart)</h3>
-      </div>
-      <div class="overflow-x-auto max-h-96 overflow-y-auto">
-        <table class="w-full text-xs font-mono">
-          <thead class="bg-slate-900/80 text-[10px] uppercase text-slate-400 sticky top-0">
-            <tr>
-              <th class="text-left px-3 py-2">Date</th>
-              <th class="text-left px-3 py-2">Symbol</th>
-              <th class="text-right px-3 py-2">Qty</th>
-              <th class="text-right px-3 py-2">Entry</th>
-              <th class="text-right px-3 py-2">Init Stop</th>
-              <th class="text-right px-3 py-2">Exit</th>
-              <th class="text-right px-3 py-2">P&amp;L ($)</th>
-              <th class="text-right px-3 py-2">P&amp;L (R)</th>
-              <th class="text-left px-3 py-2">Reason</th>
-              <th class="text-right px-3 py-2">MFE/MAE</th>
-              <th class="text-right px-3 py-2">RVOL</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-700/40">
-            {% for t in selected_run.trades[:200] %}
-            <tr class="hover:bg-slate-700/30 transition">
-              <td class="px-3 py-2 text-slate-400">{{ t.trade_date }}</td>
-              <td class="px-3 py-2">
-                <button type="button" onclick="openBacktestTradeChart('{{ selected_run.id }}', {{ t.id }})" class="font-bold text-sky-400 hover:text-sky-300 underline decoration-sky-500/40">
-                  {{ t.symbol }}
-                </button>
-              </td>
-              <td class="px-3 py-2 text-right text-slate-300">{{ t.qty }}</td>
-              <td class="px-3 py-2 text-right text-slate-200">${{ "%.2f"|format(t.entry_price or 0) }}</td>
-              <td class="px-3 py-2 text-right text-slate-400">${{ "%.2f"|format(t.initial_stop_price or 0) }}</td>
-              <td class="px-3 py-2 text-right text-slate-200">${{ "%.2f"|format(t.exit_price or 0) }}</td>
-              <td class="px-3 py-2 text-right font-semibold {% if (t.pnl_dollars or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-                {{ "%+.2f"|format(t.pnl_dollars or 0) | replace("+", "+$") | replace("-", "-$") }}
-              </td>
-              <td class="px-3 py-2 text-right font-semibold {% if (t.pnl_r or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
-                {{ "%+.2f"|format(t.pnl_r or 0) }}R
-              </td>
-              <td class="px-3 py-2">
-                <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">{{ t.exit_reason }}</span>
-              </td>
-              <td class="px-3 py-2 text-right text-slate-400">+{{ "%.1f"|format(t.mfe_r or 0) }} / -{{ "%.1f"|format(t.mae_r or 0) }}</td>
-              <td class="px-3 py-2 text-right text-slate-400">{{ "%.1f"|format(t.signal_rvol or 0) }}x</td>
-            </tr>
+    <!-- TAB 3: STRATEGY REVIEW & RISK OF RUIN -->
+    <div id="tab-panel-review" class="bt-tab-panel hidden space-y-4">
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div class="lg:col-span-2 bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-white">Automated Diagnostic Findings</h3>
+            <span class="text-[10px] uppercase px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-semibold">{{ selected_run.review_source }}</span>
+          </div>
+          <div class="space-y-2">
+            {% for d in selected_run.diagnostics %}
+            <div class="p-3 rounded-lg bg-slate-900/70 border {% if d.severity == 'ACTION' %}border-rose-500/40{% elif d.severity == 'WATCH' %}border-amber-500/40{% else %}border-slate-700/60{% endif %}">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-bold text-white">[{{ d.severity }}] {{ d.title }}</span>
+                <span class="text-[10px] font-mono text-slate-400">n={{ d.sample_size }} &bull; {{ d.config_knob }}</span>
+              </div>
+              <p class="text-xs text-slate-300 mt-1">{{ d.evidence }}</p>
+              <p class="text-[11px] text-sky-300 mt-1">&rarr; {{ d.recommendation }}</p>
+            </div>
             {% endfor %}
-          </tbody>
-        </table>
+          </div>
+        </div>
+
+        <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4 space-y-3">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-white">Risk of Ruin &amp; Kelly Sizing</h3>
+          <div class="space-y-1.5 text-xs font-mono">
+            <div class="flex justify-between"><span class="text-slate-400">Sizing Status</span><span class="text-amber-300 font-bold">{{ ror_a.get('sizing_status', 'N/A') }}</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">Full Kelly / Half-Kelly</span><span class="text-white">{{ "%.2f"|format(ror_a.get('kelly_pct', 0)) }}% / {{ "%.2f"|format(ror_a.get('half_kelly_pct', 0)) }}%</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">MC Median Max DD</span><span class="text-rose-400">-{{ "%.1f"|format(ror_mc.get('median_max_dd_pct') or 0) }}%</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">MC P95 Max DD</span><span class="text-rose-400">-{{ "%.1f"|format(ror_mc.get('p95_max_dd_pct') or 0) }}%</span></div>
+            <div class="flex justify-between"><span class="text-slate-400">Expected Max Losing Streak</span><span class="text-slate-200">{{ ror_mc.get('expected_max_losing_streak') or 'N/A' }}</span></div>
+          </div>
+
+          {% if deep.get('health_state_days') %}
+          <div class="border-t border-slate-700/60 pt-2.5 space-y-1 text-xs font-mono">
+            <div class="text-[10px] uppercase text-slate-400 font-sans font-semibold mb-1">Health Ladder Days</div>
+            {% for hs, cnt in deep.get('health_state_days', {}).items() %}
+            <div class="flex justify-between"><span class="text-slate-300">{{ hs }}</span><span class="text-white">{{ cnt }}d</span></div>
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if selected_run.review_markdown %}
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl p-4">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-white mb-2">Full Written Strategy Review</h3>
+        <pre class="whitespace-pre-wrap font-mono text-xs text-slate-300 bg-slate-900/70 p-4 rounded-lg border border-slate-700/50 max-h-96 overflow-y-auto">{{ selected_run.review_markdown }}</pre>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- TAB 4: SIMULATED TRADE LOG -->
+    <div id="tab-panel-trades" class="bt-tab-panel hidden">
+      <div class="bg-slate-800/80 border border-slate-700/60 rounded-xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-slate-700/60 flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-white">Simulated Trade Log ({{ selected_run.trades | length }} trades &mdash; Click any symbol for 5m chart)</h3>
+          <div class="flex items-center gap-2">
+            <input type="text" id="trade-filter-sym" oninput="filterTrades()" placeholder="Filter symbol..." class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-mono w-32">
+            <select id="trade-filter-reason" onchange="filterTrades()" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white">
+              <option value="ALL">All Exits</option>
+              <option value="TAKE_PROFIT">TAKE_PROFIT</option>
+              <option value="STOP_LOSS">STOP_LOSS</option>
+              <option value="BREAKEVEN">BREAKEVEN</option>
+              <option value="EOD_FLATTEN">EOD_FLATTEN</option>
+              <option value="FOMC_FLATTEN">FOMC_FLATTEN</option>
+            </select>
+          </div>
+        </div>
+        <div class="overflow-x-auto max-h-[520px] overflow-y-auto">
+          <table class="w-full text-xs font-mono">
+            <thead class="bg-slate-900/80 text-[10px] uppercase text-slate-400 sticky top-0">
+              <tr>
+                <th class="text-left px-3 py-2">Date</th>
+                <th class="text-left px-3 py-2">Symbol</th>
+                <th class="text-right px-3 py-2">Qty</th>
+                <th class="text-right px-3 py-2">Entry</th>
+                <th class="text-right px-3 py-2">Init Stop</th>
+                <th class="text-right px-3 py-2">Exit</th>
+                <th class="text-right px-3 py-2">P&amp;L ($)</th>
+                <th class="text-right px-3 py-2">P&amp;L (R)</th>
+                <th class="text-left px-3 py-2">Reason</th>
+                <th class="text-right px-3 py-2">MFE/MAE</th>
+                <th class="text-right px-3 py-2">RVOL</th>
+              </tr>
+            </thead>
+            <tbody id="bt-trades-tbody" class="divide-y divide-slate-700/40">
+              {% for t in selected_run.trades[:500] %}
+              <tr class="bt-trade-row hover:bg-slate-700/30 transition" data-sym="{{ t.symbol }}" data-reason="{{ t.exit_reason }}">
+                <td class="px-3 py-2 text-slate-400">{{ t.trade_date }}</td>
+                <td class="px-3 py-2">
+                  <button type="button" onclick="openBacktestTradeChart('{{ selected_run.id }}', {{ t.id }})" class="font-bold text-sky-400 hover:text-sky-300 underline decoration-sky-500/40">
+                    {{ t.symbol }}
+                  </button>
+                </td>
+                <td class="px-3 py-2 text-right text-slate-300">{{ t.qty }}</td>
+                <td class="px-3 py-2 text-right text-slate-200">${{ "%.2f"|format(t.entry_price or 0) }}</td>
+                <td class="px-3 py-2 text-right text-slate-400">${{ "%.2f"|format(t.initial_stop_price or 0) }}</td>
+                <td class="px-3 py-2 text-right text-slate-200">${{ "%.2f"|format(t.exit_price or 0) }}</td>
+                <td class="px-3 py-2 text-right font-semibold {% if (t.pnl_dollars or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+                  {{ "%+.2f"|format(t.pnl_dollars or 0) | replace("+", "+$") | replace("-", "-$") }}
+                </td>
+                <td class="px-3 py-2 text-right font-semibold {% if (t.pnl_r or 0) >= 0 %}text-emerald-400{% else %}text-rose-400{% endif %}">
+                  {{ "%+.2f"|format(t.pnl_r or 0) }}R
+                </td>
+                <td class="px-3 py-2">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-300">{{ t.exit_reason }}</span>
+                </td>
+                <td class="px-3 py-2 text-right text-slate-400">+{{ "%.1f"|format(t.mfe_r or 0) }} / -{{ "%.1f"|format(t.mae_r or 0) }}</td>
+                <td class="px-3 py-2 text-right text-slate-400">{{ "%.1f"|format(t.signal_rvol or 0) }}x</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -569,7 +830,33 @@
 
 <script>
   let _activeRunId = null;
-  let _pollTimer = null;
+
+  function switchBtTab(tabName) {
+    document.querySelectorAll(".bt-tab-panel").forEach(p => p.classList.add("hidden"));
+    document.querySelectorAll(".bt-tab-btn").forEach(b => {
+      b.classList.remove("border-sky-400", "text-white", "bg-slate-800/80", "font-bold");
+      b.classList.add("border-transparent", "text-slate-400", "font-semibold");
+    });
+    const panel = document.getElementById(`tab-panel-${tabName}`);
+    const btn = document.getElementById(`tab-btn-${tabName}`);
+    if (panel) panel.classList.remove("hidden");
+    if (btn) {
+      btn.classList.add("border-sky-400", "text-white", "bg-slate-800/80", "font-bold");
+      btn.classList.remove("border-transparent", "text-slate-400", "font-semibold");
+    }
+  }
+
+  function filterTrades() {
+    const symQ = (document.getElementById("trade-filter-sym")?.value || "").trim().toUpperCase();
+    const reasonQ = document.getElementById("trade-filter-reason")?.value || "ALL";
+    document.querySelectorAll(".bt-trade-row").forEach(tr => {
+      const sym = (tr.dataset.sym || "").toUpperCase();
+      const reason = tr.dataset.reason || "";
+      const matchSym = !symQ || sym.includes(symQ);
+      const matchReason = reasonQ === "ALL" || reason === reasonQ;
+      tr.style.display = (matchSym && matchReason) ? "" : "none";
+    });
+  }
 
   function toggleModeFields() {
     const mode = document.getElementById("bt_mode").value;
@@ -584,6 +871,7 @@
     const cancelBtn = document.getElementById("bt-cancel-btn");
     const fb = document.getElementById("bt-feedback");
     const pWrap = document.getElementById("bt-progress-wrap");
+    const lunchOn = document.getElementById("bt_lunch_blackout").checked;
 
     const payload = {
       name: document.getElementById("bt_name").value,
@@ -599,8 +887,12 @@
       scanner_min_rvol: Number(document.getElementById("bt_rvol").value),
       scanner_max_atr_extension: Number(document.getElementById("bt_atr_ext").value),
       breakeven_trigger_r: Number(document.getElementById("bt_be_r").value),
-      take_profit_r: 2.0,
+      take_profit_r: Number(document.getElementById("bt_tp_r").value),
       exit_slippage_bps: Number(document.getElementById("bt_slip").value),
+      custom_entry_cutoff_et: document.getElementById("bt_entry_cutoff").value.trim() || null,
+      midday_blackout_start_et: lunchOn ? "12:00" : null,
+      midday_blackout_end_et: lunchOn ? "14:00" : null,
+      require_spy_above_daily_ema20: document.getElementById("bt_spy_ema20").checked,
       enable_slot_recycling: document.getElementById("bt_slot_recycle").checked,
       enable_health_ladder: document.getElementById("bt_health_ladder").checked,
       enable_fomc_guard: document.getElementById("bt_fomc").checked,
@@ -665,9 +957,9 @@
         document.getElementById("bt-cancel-btn").classList.add("hidden");
         return;
       }
-      _pollTimer = setTimeout(() => pollBacktestStatus(runId), 1200);
+      setTimeout(() => pollBacktestStatus(runId), 1200);
     } catch (_) {
-      _pollTimer = setTimeout(() => pollBacktestStatus(runId), 2000);
+      setTimeout(() => pollBacktestStatus(runId), 2000);
     }
   }
 
@@ -682,7 +974,6 @@
     if (res.ok) window.location.href = "/backtest";
   }
 
-  // Click simulated trade symbol -> render 5m bars in shared Lightweight Charts modal
   async function openBacktestTradeChart(runId, tradeId) {
     const modal = document.getElementById("symbol-chart-modal");
     const symEl = document.getElementById("chart-modal-symbol");
@@ -754,38 +1045,52 @@
     }
   }
 
-  // Render Equity Curve vs SPY when a completed run is displayed
   {% if selected_run and selected_run.status == 'COMPLETED' and selected_run.report and selected_run.report.roi_equity and selected_run.report.roi_equity.equity_curve %}
   document.addEventListener("DOMContentLoaded", () => {
-    const el = document.getElementById("bt-equity-chart");
-    if (!el || !window.LightweightCharts) return;
     const curve = {{ selected_run.report.roi_equity.equity_curve | tojson }};
-    if (!curve.length) return;
+    if (!curve.length || !window.LightweightCharts) return;
 
-    const chart = LightweightCharts.createChart(el, {
-      layout: { background: { color: "#0f172a" }, textColor: "#94a3b8" },
-      grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
-      rightPriceScale: { borderColor: "#334155" },
-      timeScale: { borderColor: "#334155" },
-      width: el.clientWidth,
-      height: 288,
-    });
+    const eqEl = document.getElementById("bt-equity-chart");
+    if (eqEl) {
+      const chart = LightweightCharts.createChart(eqEl, {
+        layout: { background: { color: "#0f172a" }, textColor: "#94a3b8" },
+        grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
+        rightPriceScale: { borderColor: "#334155" },
+        timeScale: { borderColor: "#334155" },
+        width: eqEl.clientWidth,
+        height: 256,
+      });
+      const eqSeries = chart.addAreaSeries({
+        lineColor: "#38bdf8",
+        topColor: "rgba(56, 189, 248, 0.25)",
+        bottomColor: "rgba(56, 189, 248, 0.01)",
+        lineWidth: 2,
+      });
+      eqSeries.setData(curve.map(pt => ({ time: pt.date, value: pt.equity })));
+      const spySeries = chart.addLineSeries({ color: "#94a3b8", lineWidth: 1, lineStyle: 2 });
+      spySeries.setData(curve.map(pt => ({ time: pt.date, value: pt.spy_equity })));
+      chart.timeScale().fitContent();
+    }
 
-    const eqSeries = chart.addAreaSeries({
-      lineColor: "#38bdf8",
-      topColor: "rgba(56, 189, 248, 0.25)",
-      bottomColor: "rgba(56, 189, 248, 0.01)",
-      lineWidth: 2,
-    });
-    eqSeries.setData(curve.map(pt => ({ time: pt.date, value: pt.equity })));
-
-    const spySeries = chart.addLineSeries({
-      color: "#94a3b8",
-      lineWidth: 1,
-      lineStyle: 2,
-    });
-    spySeries.setData(curve.map(pt => ({ time: pt.date, value: pt.spy_equity })));
-    chart.timeScale().fitContent();
+    const ddEl = document.getElementById("bt-dd-chart");
+    if (ddEl) {
+      const ddChart = LightweightCharts.createChart(ddEl, {
+        layout: { background: { color: "#0f172a" }, textColor: "#94a3b8" },
+        grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
+        rightPriceScale: { borderColor: "#334155" },
+        timeScale: { borderColor: "#334155" },
+        width: ddEl.clientWidth,
+        height: 160,
+      });
+      const ddSeries = ddChart.addAreaSeries({
+        lineColor: "#fb7185",
+        topColor: "rgba(251, 113, 133, 0.05)",
+        bottomColor: "rgba(251, 113, 133, 0.35)",
+        lineWidth: 2,
+      });
+      ddSeries.setData(curve.map(pt => ({ time: pt.date, value: -Math.abs(pt.drawdown_pct || 0) })));
+      ddChart.timeScale().fitContent();
+    }
   });
   {% endif %}
 </script>

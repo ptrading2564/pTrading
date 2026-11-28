@@ -104,6 +104,11 @@ async def test_take_profit_and_compounding(isolated_bt_db):
     assert tr["breakeven_stepped"] == 1
     assert tr["pnl_dollars"] > 450.0  # ~+2.0R on $250 risk
     assert res["summary"]["ending_equity"] > 50450.0
+    deep = res["report"]["deep_diagnostics"]
+    assert deep["exit_reason_breakdown"][0]["reason"] == "TAKE_PROFIT"
+    assert len(deep["r_distribution"]) == 6
+    assert len(deep["mfe_distribution"]) == 5
+    assert len(deep["day_of_week"]) == 5
 
 
 @pytest.mark.asyncio
@@ -469,5 +474,23 @@ def test_backtest_web_ui_auth_and_isolation(isolated_bt_db):
         auth=(settings.DASHBOARD_USERNAME, settings.DASHBOARD_PASSWORD),
     )
     assert r_ok.status_code == 200
-    assert "Automated Portfolio Backtest Lab" in r_ok.text
+    assert "Automated Portfolio Backtest" in r_ok.text
+    assert "Diagnostics Lab" in r_ok.text
     assert "Mode A: Point-in-Time Dynamic Screener" in r_ok.text
+
+
+def test_cache_coverage_never_bridges_non_contiguous_gaps():
+    """Fetching May 2025 then Jan 2024 must NOT mark Feb 2024..Apr 2025 as cached."""
+    from backtest.data_loader import AlpacaCachedDataStore
+
+    intervals = [("2025-05-05", "2025-05-07"), ("2024-01-01", "2024-01-31")]
+    merged = AlpacaCachedDataStore._merge_contiguous_intervals(intervals)
+    assert merged == [("2024-01-01", "2024-01-31"), ("2025-05-05", "2025-05-07")]
+    assert AlpacaCachedDataStore._is_range_covered(merged, "2024-01-05", "2024-01-20") is True
+    assert AlpacaCachedDataStore._is_range_covered(merged, "2024-02-01", "2024-02-28") is False
+
+    # Adjacent month merges cleanly without bridging to 2025
+    merged2 = AlpacaCachedDataStore._merge_contiguous_intervals(merged + [("2024-02-01", "2024-02-29")])
+    assert merged2 == [("2024-01-01", "2024-02-29"), ("2025-05-05", "2025-05-07")]
+    assert AlpacaCachedDataStore._is_range_covered(merged2, "2024-01-15", "2024-02-15") is True
+    assert AlpacaCachedDataStore._is_range_covered(merged2, "2024-03-01", "2024-03-31") is False

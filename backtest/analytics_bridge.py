@@ -1,9 +1,12 @@
-"""Bridge feeding backtest outputs directly into live AnalyticsService and StrategyReviewer (read-only)."""
+"""Bridge feeding backtest outputs directly into live AnalyticsService and StrategyReviewer (read-only),
+plus deep-dive failure diagnostics (exit breakdown, R/MFE histograms, day-of-week, symbol leaderboard).
+"""
 
 from __future__ import annotations
 
 import math
 import statistics
+from datetime import date
 from typing import Any, Dict, List, Tuple
 
 from app.services.analytics_service import (
@@ -55,7 +58,6 @@ def compute_annualized_metrics(
     max_dd = max((float(d.get("drawdown_pct") or 0.0) for d in daily_rows), default=0.0)
     calmar = (cagr_pct / max_dd) if max_dd > 0.01 else 0.0
 
-    # Cumulative SPY return across tested sessions
     spy_growth = 1.0
     has_spy = False
     for d in daily_rows:
@@ -79,7 +81,6 @@ def compute_annualized_metrics(
 
 
 def compute_monthly_returns(daily_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Aggregates daily equity rows into monthly compounded ROI & trade count buckets."""
     by_month: Dict[str, List[Dict[str, Any]]] = {}
     for d in daily_rows:
         ym = str(d["date"])[:7]
@@ -101,7 +102,6 @@ def compute_regime_breakdown(
     daily_rows: List[Dict[str, Any]],
     trades: List[Dict[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
-    """Splits backtest performance across market regimes (TREND_UP / CHOP / TREND_DOWN)."""
     regime_by_date = {str(d["date"]): str(d.get("market_regime") or "UNKNOWN") for d in daily_rows}
     days_by_regime: Dict[str, int] = {}
     for reg in regime_by_date.values():
@@ -129,6 +129,148 @@ def compute_regime_breakdown(
     return out
 
 
+def compute_failure_diagnostics(
+    trades: List[Dict[str, Any]],
+    daily_rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Deep-dive attribution buckets pinpointing where the strategy gains or leaks edge."""
+    total_n = len(trades)
+
+    # 1. Exit Reason Breakdown
+    by_exit: Dict[str, List[Dict[str, Any]]] = {}
+    for t in trades:
+        reason = str(t.get("exit_reason") or "UNKNOWN")
+        by_exit.setdefault(reason, []).append(t)
+
+    exit_breakdown: List[Dict[str, Any]] = []
+    for reason in sorted(by_exit.keys(), key=lambda k: len(by_exit[k]), reverse=True):
+        grp = by_exit[reason]
+        rs = [float(x["pnl_r"]) for x in grp if x.get("pnl_r") is not None]
+        pnl = round(sum(float(x.get("pnl_dollars") or 0.0) for x in grp), 2)
+        exit_breakdown.append(
+            {
+                "reason": reason,
+                "count": len(grp),
+                "pct": round((len(grp) / total_n) * 100.0, 1) if total_n else 0.0,
+                "avg_r": round(sum(rs) / len(rs), 3) if rs else 0.0,
+                "total_r": round(sum(rs), 2) if rs else 0.0,
+                "net_pnl": pnl,
+            }
+        )
+
+    # 2. R-Multiple Distribution Histogram
+    r_bins = [
+        ("<= -1.0R", lambda r: r <= -0.95),
+        ("-0.95 to -0.2R", lambda r: -0.95 < r < -0.20),
+        ("BE (-0.2 to +0.2R)", lambda r: -0.20 <= r <= 0.20),
+        ("+0.2 to +1.0R", lambda r: 0.20 < r < 1.00),
+        ("+1.0 to +1.9R", lambda r: 1.00 <= r < 1.90),
+        (">= +1.9R (TP)", lambda r: r >= 1.90),
+    ]
+    r_vals = [float(t["pnl_r"]) for t in trades if t.get("pnl_r") is not None]
+    r_distribution = []
+    for label, pred in r_bins:
+        cnt = sum(1 for r in r_vals if pred(r))
+        r_distribution.append(
+            {
+                "label": label,
+                "count": cnt,
+                "pct": round((cnt / len(r_vals)) * 100.0, 1) if r_vals else 0.0,
+            }
+        )
+
+    # 3. MFE Peak Distribution (pinpoints stalling before +2.0R)
+    mfe_bins = [
+        ("< 0.5R", lambda m: m < 0.5),
+        ("0.5 - 1.0R", lambda m: 0.5 <= m < 1.0),
+        ("1.0 - 1.5R", lambda m: 1.0 <= m < 1.5),
+        ("1.5 - 2.0R", lambda m: 1.5 <= m < 2.0),
+        (">= 2.0R", lambda m: m >= 2.0),
+    ]
+    mfe_vals = [float(t["mfe_r"]) for t in trades if t.get("mfe_r") is not None]
+    mfe_distribution = []
+    for label, pred in mfe_bins:
+        cnt = sum(1 for m in mfe_vals if pred(m))
+        mfe_distribution.append(
+            {
+                "label": label,
+                "count": cnt,
+                "pct": round((cnt / len(mfe_vals)) * 100.0, 1) if mfe_vals else 0.0,
+            }
+        )
+
+    # 4. Day-of-Week Breakdown
+    dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    by_dow: Dict[int, List[Dict[str, Any]]] = {i: [] for i in range(5)}
+    for t in trades:
+        td = t.get("trade_date")
+        if td:
+            try:
+                wd = date.fromisoformat(str(td)[:10]).weekday()
+                if wd in by_dow:
+                    by_dow[wd].append(t)
+            except ValueError:
+                pass
+
+    day_of_week: List[Dict[str, Any]] = []
+    for wd in range(5):
+        grp = by_dow[wd]
+        rs = [float(x["pnl_r"]) for x in grp if x.get("pnl_r") is not None]
+        wins = sum(1 for r in rs if r > 0.1)
+        pnl = round(sum(float(x.get("pnl_dollars") or 0.0) for x in grp), 2)
+        day_of_week.append(
+            {
+                "day": dow_names[wd],
+                "trades": len(grp),
+                "win_rate_pct": round((wins / len(rs)) * 100.0, 1) if rs else 0.0,
+                "avg_r": round(sum(rs) / len(rs), 3) if rs else 0.0,
+                "total_r": round(sum(rs), 2) if rs else 0.0,
+                "net_pnl": pnl,
+            }
+        )
+
+    # 5. Health-Ladder State Breakdown (days spent in each governance state)
+    health_days: Dict[str, int] = {}
+    for d in daily_rows:
+        st = str(d.get("health_state") or "HEALTHY")
+        health_days[st] = health_days.get(st, 0) + 1
+
+    # 6. Top 10 Best & Top 10 Worst Drag Symbols
+    by_sym: Dict[str, List[Dict[str, Any]]] = {}
+    for t in trades:
+        sym = str(t.get("symbol") or "").upper()
+        if sym:
+            by_sym.setdefault(sym, []).append(t)
+
+    sym_stats = []
+    for sym, grp in by_sym.items():
+        rs = [float(x["pnl_r"]) for x in grp if x.get("pnl_r") is not None]
+        wins = sum(1 for r in rs if r > 0.1)
+        pnl = round(sum(float(x.get("pnl_dollars") or 0.0) for x in grp), 2)
+        sym_stats.append(
+            {
+                "symbol": sym,
+                "trades": len(grp),
+                "win_rate_pct": round((wins / len(rs)) * 100.0, 1) if rs else 0.0,
+                "total_r": round(sum(rs), 2) if rs else 0.0,
+                "net_pnl": pnl,
+            }
+        )
+
+    top_winners = sorted([s for s in sym_stats if s["total_r"] > 0], key=lambda x: x["total_r"], reverse=True)[:10]
+    top_losers = sorted([s for s in sym_stats if s["total_r"] < 0], key=lambda x: x["total_r"])[:10]
+
+    return {
+        "exit_reason_breakdown": exit_breakdown,
+        "r_distribution": r_distribution,
+        "mfe_distribution": mfe_distribution,
+        "day_of_week": day_of_week,
+        "health_state_days": health_days,
+        "top_winners": top_winners,
+        "top_losers": top_losers,
+    }
+
+
 async def build_backtest_report_and_review(
     cfg: BacktestConfig,
     trades: List[Dict[str, Any]],
@@ -140,8 +282,8 @@ async def build_backtest_report_and_review(
     ann = compute_annualized_metrics(daily_rows, cfg.initial_capital)
     monthly = compute_monthly_returns(daily_rows)
     regimes = compute_regime_breakdown(daily_rows, trades)
+    deep_diag = compute_failure_diagnostics(trades, daily_rows)
 
-    # Build roi_equity payload compatible with live StrategyReviewer & calculate_strategy_health_score
     end_eq = float(daily_rows[-1]["ending_equity"]) if daily_rows else cfg.initial_capital
     last_day = daily_rows[-1] if daily_rows else None
     equity_curve = []
@@ -212,6 +354,7 @@ async def build_backtest_report_and_review(
         "annualized": ann,
         "monthly_returns": monthly,
         "regime_breakdown": regimes,
+        "deep_diagnostics": deep_diag,
         "strategy_params": {
             "risk_percent_per_trade": base_risk_pct,
             "max_concurrent_positions": cfg.max_concurrent_positions,
@@ -224,7 +367,7 @@ async def build_backtest_report_and_review(
             "stale_order_timeout_seconds": cfg.stale_order_timeout_minutes * 60,
         },
         "roi_equity": roi_equity,
-        "daily_trades_metrics": cum_metrics,  # StrategyReviewer expects this key
+        "daily_trades_metrics": cum_metrics,
         "cumulative_trades_metrics": cum_metrics,
         "signal_funnel": funnel_stats,
         "missed_signals_audit": {},
@@ -243,7 +386,6 @@ async def build_backtest_report_and_review(
         },
     }
 
-    # Layer 1 deterministic diagnostics + Layer 2 review (opt-in Gemini)
     diagnostics = strategy_reviewer.run_diagnostics(report)
     if cfg.run_gemini_review:
         review_md, review_source, diagnostics = await strategy_reviewer.generate_review(report)
@@ -251,7 +393,6 @@ async def build_backtest_report_and_review(
         review_md = strategy_reviewer.build_deterministic_review(report, diagnostics)
         review_source = "deterministic"
 
-    # Compact summary card for run history & side-by-side comparison table
     summary = {
         "ending_equity": round(end_eq, 2),
         "net_pnl": round(end_eq - cfg.initial_capital, 2),
